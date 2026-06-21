@@ -77,7 +77,7 @@ targets:
         type: file
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.thdxg.macterm
+        PRODUCT_BUNDLE_IDENTIFIER: com.thdxg.seshterm
         PRODUCT_NAME: Macterm
         INFOPLIST_FILE: Macterm/Info.plist
         CODE_SIGN_ENTITLEMENTS: Macterm/Macterm.entitlements
@@ -106,16 +106,17 @@ targets:
           - "-Xcc"
           - "-Wno-incomplete-umbrella"
         # Display name (Dock / menu bar / Finder) — wired into Info.plist's
-        # CFBundleDisplayName. The bundle *name* (PRODUCT_NAME) stays "Macterm"
-        # in every config so TEST_HOST and on-disk layout don't shift.
-        PRODUCT_DISPLAY_NAME: Macterm
+        # CFBundleDisplayName, and the Application Support directory name. This
+        # is the fork's identity; the bundle *name* (PRODUCT_NAME) stays
+        # "Macterm" in every config so TEST_HOST and on-disk layout don't shift.
+        PRODUCT_DISPLAY_NAME: Seshterm
       configs:
         Debug:
           # Distinct bundle ID + display name so the debug app coexists with a
           # running release app (open won't conflate them) and logs filter
           # cleanly by subsystem (scripts/logs.sh).
-          PRODUCT_BUNDLE_IDENTIFIER: com.thdxg.macterm.debug
-          PRODUCT_DISPLAY_NAME: Macterm Debug
+          PRODUCT_BUNDLE_IDENTIFIER: com.thdxg.seshterm.debug
+          PRODUCT_DISPLAY_NAME: Seshterm Debug
     dependencies:
       - framework: GhosttyKit.xcframework
         embed: false

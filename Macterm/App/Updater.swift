@@ -29,17 +29,13 @@ final class Updater: ObservableObject {
     private var cancellable: AnyCancellable?
 
     private init() {
-        // In debug builds Sparkle can't verify the unsigned dev binary against
-        // the production EdDSA key, so it pops an "Unable to Check For
-        // Updates" dialog on every launch. Start the controller without
-        // kicking off update checks; release builds still auto-check.
-        let startUpdater: Bool = {
-            #if DEBUG
-            return false
-            #else
-            return true
-            #endif
-        }()
+        // Seshterm is a personal fork that updates via `mise run install`, not
+        // Sparkle. The bundled feed still points at upstream Macterm's appcast,
+        // so starting the updater would offer to "update" Seshterm to vanilla
+        // Macterm and overwrite the fork. Never start it — no background checks,
+        // and "Check for Updates" stays disabled (`canCheckForUpdates` is false
+        // while the updater isn't started).
+        let startUpdater = false
         let updaterDelegate = updaterDelegate
         let userDriverDelegate = userDriverDelegate
         controller = SPUStandardUpdaterController(
