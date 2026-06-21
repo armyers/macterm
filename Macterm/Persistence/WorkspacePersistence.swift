@@ -227,7 +227,9 @@ enum WorkspaceSerializer {
             // neither. With persistence off, the default (plain-shell restore)
             // is unchanged. `sessionID` is always persisted.
             let zmxBacked = Preferences.shared.sessionPersistenceEnabled && ZmxService.standard.isAvailable
-            let captureCommand = Preferences.shared.sessionPersistenceEnabled && !zmxBacked
+            // Ephemeral panes (the scrollback editor) restore as a plain shell —
+            // their command points at a temp file that's gone by next launch.
+            let captureCommand = Preferences.shared.sessionPersistenceEnabled && !zmxBacked && !p.ephemeral
             return .pane(PaneSnapshot(
                 id: p.id,
                 projectPath: path,

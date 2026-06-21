@@ -242,6 +242,24 @@ final class GhosttyTerminalNSView: NSView {
         return pid != 0 ? pid_t(pid) : nil
     }
 
+    /// The pane's full scrollback + screen as plain text (history included), for
+    /// the "edit scrollback" command. Uses a screen-wide selection (top-left →
+    /// bottom-right of `GHOSTTY_POINT_SCREEN`), the same span Ghostty's own
+    /// select-all uses. nil when there's no surface or the read fails.
+    func readScrollback() -> String? {
+        guard let surface else { return nil }
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(tag: GHOSTTY_POINT_SCREEN, coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0),
+            bottom_right: ghostty_point_s(tag: GHOSTTY_POINT_SCREEN, coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT, x: 0, y: 0),
+            rectangle: false
+        )
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_text(surface, selection, &text) else { return nil }
+        defer { ghostty_surface_free_text(surface, &text) }
+        guard let ptr = text.text, text.text_len > 0 else { return nil }
+        return String(bytes: UnsafeRawBufferPointer(start: ptr, count: Int(text.text_len)), encoding: .utf8)
+    }
+
     /// The slave tty path for this surface's pty, used by `ProcessInspector` to
     /// read terminal input mode (canonical shell command vs raw/cbreak TUI).
     var ttyName: String? {

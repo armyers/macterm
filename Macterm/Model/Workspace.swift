@@ -123,9 +123,34 @@ final class TerminalTab: Identifiable {
     /// pane's NSView isn't attached yet and has no measurable bounds.
     @discardableResult
     func autoSplit(paneID: UUID) -> UUID? {
-        let bounds = splitRoot.findPane(id: paneID)?.nsView?.bounds.size ?? .zero
-        let direction: SplitDirection = bounds.height > bounds.width ? .vertical : .horizontal
+        let direction = autoSplitDirection(for: paneID)
         return split(paneID: paneID, direction: direction)
+    }
+
+    /// The split axis `autoSplit` would pick for `paneID`: a wide pane splits
+    /// left/right, a tall pane top/bottom (defaulting to horizontal before the
+    /// NSView has measurable bounds).
+    func autoSplitDirection(for paneID: UUID) -> SplitDirection {
+        let bounds = splitRoot.findPane(id: paneID)?.nsView?.bounds.size ?? .zero
+        return bounds.height > bounds.width ? .vertical : .horizontal
+    }
+
+    /// Insert an already-built pane as a new split beside `paneID` (the
+    /// destination on the `.first` side, the new pane on `.second`). Reuses the
+    /// same `inserting` path as drag-and-drop `movePane`. Used to drop in a
+    /// throwaway editor pane for "edit scrollback". Returns false if `paneID`
+    /// isn't in the tree.
+    @discardableResult
+    func insertSplit(_ pane: Pane, besides paneID: UUID, direction: SplitDirection) -> Bool {
+        let (newRoot, inserted) = splitRoot.inserting(
+            pane: pane, at: paneID, direction: direction, position: .second
+        )
+        guard inserted else { return false }
+        splitRoot = newRoot
+        zoomedPaneID = nil
+        focusPane(pane.id)
+        if Preferences.shared.autoTilingEnabled { splitRoot.rebalanced() }
+        return true
     }
 
     /// Adjust the nearest matching-axis split ratio around the focused pane.
