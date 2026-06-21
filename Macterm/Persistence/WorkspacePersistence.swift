@@ -70,6 +70,17 @@ struct PaneSnapshot: Codable {
     /// outlive the shell process, and `.idle` is the default. Optional so older
     /// snapshots (without the field) decode as nil / idle.
     var needsAttention: Bool?
+    /// Stable session identifier (zmx session name) carried across restarts so a
+    /// restored pane reattaches to the same persisted process. Optional — older
+    /// snapshots decode as nil (missing key) and a fresh id is generated on restore.
+    var sessionID: String?
+    /// The pane's live foreground command (full argv) captured at save, so the
+    /// command re-launches on restore. nil when the pane was idle at a prompt —
+    /// same rule as a layout file's `run:`. (See `ProcessInspector.runningCommand`.)
+    var command: String?
+    /// A non-default shell the pane had switched into, captured at save so the
+    /// restored pane reopens in it. nil for the default login shell.
+    var shell: String?
     // No `title`: the tab name is derived live from the pane's foreground
     // process, so there's nothing per-pane to persist. (An older snapshot's
     // `title` key is harmlessly ignored on decode.)
@@ -208,10 +219,20 @@ enum WorkspaceSerializer {
             // surface hasn't reported a pwd yet.
             let path = p.nsView?.currentPwd ?? p.projectPath
             let needsAttention = p.executionState == .done
+            // Capture the live foreground command / non-default shell the same
+            // way a layout `save` does, so restore can re-launch it — but only
+            // when session persistence is enabled, so the default behavior
+            // (panes restore as plain shells) is unchanged. An idle prompt
+            // records no command. `sessionID` is always persisted (cheap, and
+            // needed for zmx reattach once that lands).
+            let persist = Preferences.shared.sessionPersistenceEnabled
             return .pane(PaneSnapshot(
                 id: p.id,
                 projectPath: path,
-                needsAttention: needsAttention
+                needsAttention: needsAttention,
+                sessionID: p.sessionID,
+                command: persist ? ProcessInspector.runningCommand(forPane: p) : nil,
+                shell: persist ? ProcessInspector.runningShell(forPane: p) : nil
             ))
         case let .split(b):
             return .split(SplitBranchSnapshot(
@@ -226,7 +247,13 @@ enum WorkspaceSerializer {
     private static func restoreNode(_ snap: SplitNodeSnapshot, projectID: UUID) -> SplitNode {
         switch snap {
         case let .pane(p):
-            let pane = Pane(projectPath: p.projectPath, projectID: projectID)
+            let pane = Pane(
+                projectPath: p.projectPath,
+                projectID: projectID,
+                command: p.command,
+                shell: p.shell,
+                sessionID: p.sessionID ?? UUID().uuidString
+            )
             if p.needsAttention == true {
                 pane.restoreNeedsAttention()
             }

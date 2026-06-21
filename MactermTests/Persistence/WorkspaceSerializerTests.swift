@@ -210,7 +210,10 @@ struct WorkspaceSerializerTests {
                     splitRoot: .pane(PaneSnapshot(
                         id: paneID,
                         projectPath: "/tmp",
-                        needsAttention: true
+                        needsAttention: true,
+                        sessionID: nil,
+                        command: nil,
+                        shell: nil
                     ))
                 )]
             )]
@@ -239,5 +242,77 @@ struct WorkspaceSerializerTests {
         try Data("not valid json {".utf8).write(to: tmp)
         let store = WorkspaceStore(fileURL: tmp)
         #expect(store.load().isEmpty)
+    }
+
+    // MARK: - Session persistence fields
+
+    private func restoreSinglePane(_ pane: PaneSnapshot) -> Pane? {
+        let projectID = UUID()
+        let snap = WorkspaceSnapshot(
+            projectID: projectID,
+            activeTabID: nil,
+            tabs: [TabSnapshot(id: UUID(), customTitle: nil, focusedPaneID: nil, splitRoot: .pane(pane))]
+        )
+        let restored = WorkspaceSerializer.restore(from: [snap], validIDs: [projectID])
+        guard case let .pane(p)? = restored.first?.tabs.first?.splitRoot else { return nil }
+        return p
+    }
+
+    @Test
+    func restore_carries_command_shell_and_session_id() {
+        let pane = PaneSnapshot(
+            id: UUID(),
+            projectPath: "/tmp/x",
+            needsAttention: nil,
+            sessionID: "sess-1",
+            command: "npm run dev",
+            shell: "/opt/homebrew/bin/fish"
+        )
+        guard let p = restoreSinglePane(pane) else {
+            Issue.record("expected leaf")
+            return
+        }
+        #expect(p.sessionID == "sess-1")
+        #expect(p.command == "npm run dev")
+        #expect(p.shell == "/opt/homebrew/bin/fish")
+        #expect(p.projectPath == "/tmp/x")
+    }
+
+    @Test
+    func restore_generates_fresh_session_id_when_absent() {
+        let pane = PaneSnapshot(id: UUID(), projectPath: "/tmp", needsAttention: nil, sessionID: nil, command: nil, shell: nil)
+        guard let p = restoreSinglePane(pane) else {
+            Issue.record("expected leaf")
+            return
+        }
+        #expect(!p.sessionID.isEmpty)
+        #expect(UUID(uuidString: p.sessionID) != nil)
+        #expect(p.command == nil)
+    }
+
+    @Test
+    func decodes_legacy_pane_snapshot_without_new_fields() throws {
+        let json = #"{"id":"\#(UUID().uuidString)","projectPath":"/tmp","needsAttention":true}"#
+        let decoded = try JSONDecoder().decode(PaneSnapshot.self, from: Data(json.utf8))
+        #expect(decoded.needsAttention == true)
+        #expect(decoded.sessionID == nil)
+        #expect(decoded.command == nil)
+        #expect(decoded.shell == nil)
+    }
+
+    @Test
+    func pane_snapshot_round_trips_new_fields() throws {
+        let snap = PaneSnapshot(
+            id: UUID(),
+            projectPath: "/tmp",
+            needsAttention: nil,
+            sessionID: "s",
+            command: "c",
+            shell: "sh"
+        )
+        let back = try JSONDecoder().decode(PaneSnapshot.self, from: JSONEncoder().encode(snap))
+        #expect(back.sessionID == "s")
+        #expect(back.command == "c")
+        #expect(back.shell == "sh")
     }
 }
