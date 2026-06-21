@@ -116,6 +116,7 @@ struct MactermApp: App {
                 AppCommandMenuItem(command: .recentTab, appState: appState, projectStore: projectStore, titleOverride: "Recent Tab")
             }
             CommandMenu("Project") {
+                AppCommandMenuItem(command: .openContext, appState: appState, projectStore: projectStore, titleOverride: "Open Context…")
                 AppCommandMenuItem(command: .openProject, appState: appState, projectStore: projectStore, titleOverride: "New Project…")
                 AppCommandMenuItem(
                     command: .renameProject,

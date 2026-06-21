@@ -56,6 +56,11 @@ struct MainWindow: View {
                 CommandPaletteOverlay()
             }
         }
+        .overlay {
+            if appState.isContextPickerVisible {
+                ContextPickerOverlay()
+            }
+        }
         .task {
             guard !appState.hasRestoredSelection else { return }
             appState.restoreSelection(projects: projectStore.projects)
@@ -75,6 +80,12 @@ struct MainWindow: View {
             } else {
                 DispatchQueue.main.async { appState.restoreFocusToActivePane() }
             }
+        }
+        .onChange(of: appState.isContextPickerVisible) { _, visible in
+            // On dismiss, return focus to the active terminal pane so typing
+            // resumes immediately (mirrors the command palette).
+            guard !visible else { return }
+            DispatchQueue.main.async { appState.restoreFocusToActivePane() }
         }
     }
 

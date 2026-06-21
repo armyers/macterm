@@ -94,6 +94,11 @@ extension AppCommand {
             return { ctx.appState.resizePane(.down, projectID: projectID) }
         case .openProject:
             return { _ = ctx.appState.openProject(store: ctx.projectStore) }
+        case .openContext:
+            return {
+                ctx.appState.contextPickerQuery = ""
+                ctx.appState.isContextPickerVisible.toggle()
+            }
         case .renameProject:
             guard let current else { return nil }
             let projectID = current.id

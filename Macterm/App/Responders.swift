@@ -20,6 +20,11 @@ final class PaletteResponder: KeyResponder {
             appState.isCommandPaletteVisible.toggle()
             return .handled
         }
+        if HotkeyRegistry.matches(event, action: .openContext) {
+            appState.contextPickerQuery = ""
+            appState.isContextPickerVisible.toggle()
+            return .handled
+        }
         // While the palette is visible, SwiftUI owns arrow / escape / etc.
         return .passThrough
     }

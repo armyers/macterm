@@ -23,6 +23,11 @@ final class AppState {
     /// was typed.
     var commandPaletteQuery = ""
     var postPaletteAction: (() -> Void)?
+    /// Visibility of the context picker (`cmd+shift+p`) — the name-first task
+    /// switcher. Separate from the command palette so the two can be open
+    /// independently and route their own keys.
+    var isContextPickerVisible = false
+    var contextPickerQuery = ""
     var renamingTabID: UUID?
     var renamingProjectID: UUID?
     private(set) var hasRestoredSelection = false
@@ -261,6 +266,19 @@ final class AppState {
         store.add(project)
         selectProject(project)
         return project
+    }
+
+    /// Create a context (task) at an explicit folder. The name is the source of
+    /// truth — a context represents a task that may span several directories, so
+    /// its name is decoupled from any single folder. No folder picker (Finder);
+    /// the directory comes from the in-app fuzzy picker (`DirectorySearch`).
+    /// No-op for a blank name. Selects the new context.
+    func createContext(named name: String, atPath path: String, store: ProjectStore) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        let project = Project(name: trimmed, path: path, sortOrder: store.projects.count)
+        store.add(project)
+        selectProject(project)
     }
 
     /// Update the active project's path to wherever the focused pane currently
