@@ -9,7 +9,7 @@ VERSION="${VERSION:-0.0.0}"
 # new tag always wins — a raw commit count can stay equal across two
 # consecutive tags built from the same commit and trip "You're up to date".
 BUILD_NUMBER="$VERSION"
-GIT_COMMIT=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_COMMIT=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2> /dev/null || echo "unknown")
 SPARKLE_ED_PUBLIC_KEY="${SPARKLE_ED_PUBLIC_KEY:-SPARKLE_ED_PUBLIC_KEY_PLACEHOLDER}"
 DMG_NAME="Macterm-${VERSION}.dmg"
 DERIVED_DATA="$BUILD_DIR/DerivedData"
@@ -23,9 +23,21 @@ EXPORT_PATH="$BUILD_DIR/export"
 
 # Regenerate the Xcode project so any project.yml edits land in CI builds
 # without requiring a developer to commit the generated .xcodeproj.
-xcodegen generate --spec "$PROJECT_ROOT/project.yml" >/dev/null
+xcodegen generate --spec "$PROJECT_ROOT/project.yml" > /dev/null
 
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
+
+# Code-signing identity. The project default is ad-hoc ("-"), which gives a
+# fresh signature on every build — so macOS keeps re-prompting for TCC
+# permissions (Downloads, Full Disk Access, …). Set MACTERM_SIGN_IDENTITY to a
+# stable cert (e.g. a self-signed "Seshterm Dev" Code Signing cert in Keychain)
+# to sign with a consistent identity so those grants persist across rebuilds.
+# Unset → ad-hoc as before. The export step below uses signingStyle=manual and
+# doesn't re-sign, so the archive's signature carries into the exported app.
+SIGN_ARGS=()
+if [[ -n ${MACTERM_SIGN_IDENTITY:-} ]]; then
+  SIGN_ARGS+=("CODE_SIGN_IDENTITY=$MACTERM_SIGN_IDENTITY")
+fi
 
 # Archive: Xcode handles universal binary arch ($(ARCHS_STANDARD) is
 # arm64+x86_64 in Release), embeds Sparkle.framework, signs everything
@@ -41,13 +53,14 @@ xcodebuild \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   GIT_COMMIT="$GIT_COMMIT" \
   SPARKLE_ED_PUBLIC_KEY="$SPARKLE_ED_PUBLIC_KEY" \
+  ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} \
   archive \
-  | (xcbeautify --quiet 2>/dev/null || cat)
+  | (xcbeautify --quiet 2> /dev/null || cat)
 
 # Export the .app from the archive. Use a minimal export plist that produces
 # a copy of the .app without re-signing or notarizing — we ship ad-hoc.
 EXPORT_PLIST=$(mktemp)
-cat > "$EXPORT_PLIST" <<'EOF'
+cat > "$EXPORT_PLIST" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -65,11 +78,11 @@ xcodebuild \
   -archivePath "$ARCHIVE_PATH" \
   -exportPath "$EXPORT_PATH" \
   -exportOptionsPlist "$EXPORT_PLIST" \
-  | (xcbeautify --quiet 2>/dev/null || cat)
+  | (xcbeautify --quiet 2> /dev/null || cat)
 rm -f "$EXPORT_PLIST"
 
 APP_BUNDLE="$EXPORT_PATH/Macterm.app"
-if [[ ! -d "$APP_BUNDLE" ]]; then
+if [[ ! -d $APP_BUNDLE ]]; then
   echo "ERROR: $APP_BUNDLE not produced by xcodebuild -exportArchive" >&2
   exit 1
 fi

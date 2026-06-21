@@ -13,6 +13,39 @@ mise run setup   # Download the pre-built GhosttyKit.xcframework
 
 See [CLAUDE.md](CLAUDE.md) for an in-depth tour of the codebase and architecture.
 
+## Local Code Signing (optional, recommended)
+
+Local builds are **ad-hoc signed** by default (`CODE_SIGN_IDENTITY = "-"`). macOS ties
+permission grants (Files and Folders, Full Disk Access, …) to the code-signing identity,
+and ad-hoc signing produces a _new_ identity on every build — so macOS re-prompts for
+permissions after each `mise run install` / `mise run run`.
+
+To make those grants **persist across rebuilds**, sign with a stable self-signed cert:
+
+1. **One-time:** Keychain Access → menu **Certificate Assistant → Create a Certificate…** →
+   Name `Seshterm Dev`, Identity Type **Self-Signed Root**, Certificate Type **Code Signing**
+   → Create.
+2. Build with the `MACTERM_SIGN_IDENTITY` env var set to that cert's name:
+
+   ```bash
+   MACTERM_SIGN_IDENTITY="Seshterm Dev" mise run install   # installed app
+   MACTERM_SIGN_IDENTITY="Seshterm Dev" mise run run       # debug build
+   ```
+
+   (Unset → ad-hoc, as before — the checked-in default is unchanged.) On the first signed
+   build, approve the "codesign wants to sign using key…" Keychain prompt with **Always Allow**.
+
+3. Verify, then grant permissions once (they now stick across rebuilds):
+
+   ```bash
+   codesign -dvv /Applications/Seshterm.app 2>&1 | grep -i authority   # → Authority=Seshterm Dev
+   ```
+
+   System Settings → Privacy & Security → **Full Disk Access** → `+` → `/Applications/Seshterm.app`.
+
+To avoid typing the env var each time, set it in a gitignored `.mise.local.toml`
+(`[env]` section) or your shell profile.
+
 ## Before You Commit
 
 Run the same checks CI runs:
