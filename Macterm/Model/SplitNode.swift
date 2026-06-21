@@ -254,6 +254,10 @@ final class Pane: Identifiable {
     let shell: String?
     /// Extra environment variables for the spawned shell. nil/empty → none.
     let env: [String: String]?
+    /// A throwaway pane (e.g. the "edit scrollback" editor split) that should
+    /// never be backed by a persistent zmx session and isn't worth restoring as
+    /// its command across restarts. Not persisted — restores as a plain shell.
+    let ephemeral: Bool
     /// The basename of the pane's live foreground process — a running command
     /// (`hx`, `btop`), or the pane's shell when idle at a prompt (so a nested
     /// `zsh` launched inside `nu` shows `zsh`). nil only before the surface
@@ -427,8 +431,9 @@ final class Pane: Identifiable {
         // Resolve how to launch: a zmx attach line when session persistence is on
         // and zmx is installed (live reattach), otherwise the native shell +
         // re-run path. Read here (not at init) so toggling the pref takes effect
-        // on the next surface creation.
-        let attach = Self.zmxAttachCommand(for: sessionID)
+        // on the next surface creation. Ephemeral panes (e.g. the scrollback
+        // editor) are never zmx-backed — they're throwaway views.
+        let attach = ephemeral ? nil : Self.zmxAttachCommand(for: sessionID)
         let launch = PaneLaunch.resolve(attachCommand: attach, command: command, shell: shell)
         let view = GhosttyTerminalNSView(
             workingDirectory: projectPath,
@@ -553,7 +558,8 @@ final class Pane: Identifiable {
         command: String? = nil,
         shell: String? = nil,
         env: [String: String]? = nil,
-        sessionID: String = UUID().uuidString
+        sessionID: String = UUID().uuidString,
+        ephemeral: Bool = false
     ) {
         self.projectPath = projectPath
         self.projectID = projectID
@@ -561,6 +567,7 @@ final class Pane: Identifiable {
         self.shell = shell
         self.env = env
         self.sessionID = sessionID
+        self.ephemeral = ephemeral
         executionTracker = TerminalExecutionTracker(hasUserInteraction: command != nil)
     }
 }

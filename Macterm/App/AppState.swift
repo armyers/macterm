@@ -37,6 +37,11 @@ final class AppState {
     private var projectRecency = RecencyStack<UUID>(limit: 50)
     private let recencyKey = "macterm.projectRecency"
 
+    /// Maps a scrollback-editor pane to the pane its scrollback came from, so
+    /// focus returns there when the editor split closes (`editScrollback`).
+    @ObservationIgnored
+    private var scrollbackEditorOrigins: [UUID: UUID] = [:]
+
     struct PendingClosePane: Equatable {
         let paneID: UUID
         let projectID: UUID
@@ -503,6 +508,41 @@ final class AppState {
         saveWorkspaces()
     }
 
+    /// Capture the focused pane's scrollback to a temp file and open it in the
+    /// user's editor as a new split (zellij/tmux "edit scrollback"). The editor
+    /// runs in an ephemeral pane via the login shell so `$EDITOR` resolves; `exec`
+    /// means the split closes when the editor quits.
+    func editScrollback(projectID: UUID) {
+        guard let tab = workspaces[projectID]?.activeTab,
+              let paneID = tab.focusedPaneID,
+              let pane = tab.splitRoot.findPane(id: paneID),
+              let text = pane.nsView?.readScrollback(), !text.isEmpty
+        else { return }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seshterm-scrollback-\(UUID().uuidString).txt")
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            logger.error("editScrollback: write failed: \(String(describing: error), privacy: .public)")
+            return
+        }
+
+        // Open at the last line (most recent output) — `+N` where N is the line
+        // count. `omittingEmptySubsequences: false` so a trailing newline counts.
+        let lineCount = text.split(separator: "\n", omittingEmptySubsequences: false).count
+        let editor = Pane(
+            projectPath: pane.projectPath,
+            projectID: projectID,
+            command: ScrollbackEditor.command(forPath: url.path(percentEncoded: false), openAtLine: lineCount),
+            ephemeral: true
+        )
+        guard tab.insertSplit(editor, besides: paneID, direction: tab.autoSplitDirection(for: paneID)) else { return }
+        // Return focus to the originating pane when the editor split closes.
+        scrollbackEditorOrigins[editor.id] = paneID
+        saveWorkspaces()
+    }
+
     func resizePane(_ direction: PaneFocusDirection, projectID: UUID, delta: CGFloat = 0.03) {
         workspaces[projectID]?.activeTab?.resize(direction, delta: delta)
         saveWorkspaces()
@@ -522,11 +562,18 @@ final class AppState {
             return
         }
         logger.debug("closePane: \(paneID, privacy: .public) project=\(projectID, privacy: .public)")
+        // If this is a scrollback-editor split, note where focus should return.
+        let editorOrigin = scrollbackEditorOrigins.removeValue(forKey: paneID)
         switch tab.removePane(paneID) {
         case .onlyPaneLeft:
             closeTab(tab.id, projectID: projectID)
         case .removed:
             saveWorkspaces()
+            // Restore first responder to the originating pane (removePane only
+            // updates the model's focusedPaneID; it doesn't move focus).
+            if let editorOrigin, tab.splitRoot.findPane(id: editorOrigin) != nil {
+                focusPane(editorOrigin, projectID: projectID)
+            }
         case .notFound:
             break
         }

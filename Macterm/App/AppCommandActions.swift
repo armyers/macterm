@@ -62,6 +62,9 @@ extension AppCommand {
         case .zoomPane:
             guard let projectID else { return nil }
             return { ctx.appState.toggleZoom(projectID: projectID) }
+        case .editScrollback:
+            guard let projectID else { return nil }
+            return { ctx.appState.editScrollback(projectID: projectID) }
         case .focusLeft:
             guard let projectID else { return nil }
             return { ctx.appState.focusPaneInDirection(.left, projectID: projectID) }

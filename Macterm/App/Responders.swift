@@ -203,6 +203,12 @@ final class MainAppResponder: KeyResponder {
             return .handled
         }
 
+        if HotkeyRegistry.matches(event, action: .editScrollback) {
+            guard let projectID = appState.activeProjectID else { return .passThrough }
+            appState.editScrollback(projectID: projectID)
+            return .handled
+        }
+
         if HotkeyRegistry.matches(event, action: .toggleSidebar) {
             appState.sidebarVisible.toggle()
             return .handled

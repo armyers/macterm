@@ -19,6 +19,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
     case splitDown
     case splitAuto
     case zoomPane
+    case editScrollback
     case focusLeft
     case focusRight
     case focusUp
@@ -62,6 +63,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .splitDown: "Split Down"
         case .splitAuto: "Split Automatically"
         case .zoomPane: "Zoom Pane"
+        case .editScrollback: "Edit Scrollback"
         case .focusLeft: "Focus Left"
         case .focusRight: "Focus Right"
         case .focusUp: "Focus Up"
@@ -103,6 +105,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
              .splitDown,
              .splitAuto,
              .zoomPane,
+             .editScrollback,
              .focusLeft,
              .focusRight,
              .focusUp,
@@ -145,6 +148,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .splitDown: .splitDown
         case .splitAuto: .splitAuto
         case .zoomPane: .zoomPane
+        case .editScrollback: .editScrollback
         case .focusLeft: .focusPaneLeft
         case .focusRight: .focusPaneRight
         case .focusUp: .focusPaneUp
