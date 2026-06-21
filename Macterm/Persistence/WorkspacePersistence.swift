@@ -221,18 +221,20 @@ enum WorkspaceSerializer {
             let needsAttention = p.executionState == .done
             // Capture the live foreground command / non-default shell the same
             // way a layout `save` does, so restore can re-launch it — but only
-            // when session persistence is enabled, so the default behavior
-            // (panes restore as plain shells) is unchanged. An idle prompt
-            // records no command. `sessionID` is always persisted (cheap, and
-            // needed for zmx reattach once that lands).
-            let persist = Preferences.shared.sessionPersistenceEnabled
+            // for the native re-run path. When zmx backs the pane, the live
+            // foreground process is the zmx client (not the user's program), and
+            // reattach via `sessionID` restores the real state, so we capture
+            // neither. With persistence off, the default (plain-shell restore)
+            // is unchanged. `sessionID` is always persisted.
+            let zmxBacked = Preferences.shared.sessionPersistenceEnabled && ZmxService.standard.isAvailable
+            let captureCommand = Preferences.shared.sessionPersistenceEnabled && !zmxBacked
             return .pane(PaneSnapshot(
                 id: p.id,
                 projectPath: path,
                 needsAttention: needsAttention,
                 sessionID: p.sessionID,
-                command: persist ? ProcessInspector.runningCommand(forPane: p) : nil,
-                shell: persist ? ProcessInspector.runningShell(forPane: p) : nil
+                command: captureCommand ? ProcessInspector.runningCommand(forPane: p) : nil,
+                shell: captureCommand ? ProcessInspector.runningShell(forPane: p) : nil
             ))
         case let .split(b):
             return .split(SplitBranchSnapshot(
