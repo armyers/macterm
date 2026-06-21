@@ -30,6 +30,8 @@ private struct GeneralSettings: View {
 
     @AppStorage(Preferences.Keys.eagerlyStartProjectTabs)
     private var eagerlyStartProjectTabs = true
+    @AppStorage(Preferences.Keys.sessionPersistenceEnabled)
+    private var sessionPersistenceEnabled = false
     @State
     private var ghosttyConfigPath: String = Preferences.shared.userGhosttyConfigPath
 
@@ -82,6 +84,19 @@ private struct GeneralSettings: View {
                 Text("Runs every tab's processes when a project opens, not just the active tab. Other projects still load when focused.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Session Persistence") {
+                Toggle("Restore running commands on relaunch", isOn: $sessionPersistenceEnabled)
+                    .onChange(of: sessionPersistenceEnabled) { _, v in
+                        Preferences.shared.sessionPersistenceEnabled = v
+                    }
+                Text(
+                    "Remembers the command each pane was running and re-launches it when you reopen Macterm. "
+                        + "Note: the command is re-run fresh; live process state and scrollback are not preserved."
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

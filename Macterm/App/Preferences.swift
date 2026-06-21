@@ -61,6 +61,14 @@ final class Preferences {
         didSet { defaults.set(eagerlyStartProjectTabs, forKey: Keys.eagerlyStartProjectTabs) }
     }
 
+    /// Restore each pane's running command/shell across restarts. Off by default
+    /// (today's behavior: panes restore as plain shells). When on, the live
+    /// foreground command is captured at save and re-launched on relaunch; with
+    /// zmx installed it upgrades to true live-process reattach (see ZmxService).
+    var sessionPersistenceEnabled: Bool {
+        didSet { defaults.set(sessionPersistenceEnabled, forKey: Keys.sessionPersistenceEnabled) }
+    }
+
     // MARK: - Sidebar icons
 
     var projectIconSymbol: String {
@@ -242,6 +250,7 @@ final class Preferences {
         self.defaults = defaults
         autoTilingEnabled = defaults.bool(forKey: Keys.autoTiling)
         eagerlyStartProjectTabs = (defaults.object(forKey: Keys.eagerlyStartProjectTabs) as? Bool) ?? true
+        sessionPersistenceEnabled = defaults.object(forKey: Keys.sessionPersistenceEnabled) as? Bool ?? false
         windowOpacity = (defaults.object(forKey: Keys.windowOpacity) as? Double) ?? 1.0
         windowBlurRadius = defaults.integer(forKey: Keys.windowBlurRadius)
         windowGlassEnabled = defaults.object(forKey: Keys.windowGlassEnabled) as? Bool ?? false
@@ -286,6 +295,7 @@ final class Preferences {
     enum Keys {
         static let autoTiling = "macterm.autoTiling.enabled"
         static let eagerlyStartProjectTabs = "macterm.eagerlyStartProjectTabs.enabled"
+        static let sessionPersistenceEnabled = "macterm.sessionPersistence.enabled"
         static let windowOpacity = "macterm.window.opacity"
         static let windowBlurRadius = "macterm.window.blurRadius"
         static let windowGlassEnabled = "macterm.window.glassEnabled"

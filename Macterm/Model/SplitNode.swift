@@ -235,6 +235,12 @@ private struct TerminalExecutionTracker {
 @MainActor @Observable
 final class Pane: Identifiable {
     let id = UUID()
+    /// Stable identifier that survives restarts (unlike `id`, which is fresh on
+    /// every restore). Persisted in the workspace snapshot and used as the
+    /// session name when a pane is backed by an external multiplexer (zmx) for
+    /// process persistence. Defaults to a fresh UUID for interactively-created
+    /// panes; restore passes the persisted value through.
+    let sessionID: String
     let projectPath: String
     let projectID: UUID
     /// Process the pane launches on first surface creation, injected into the
@@ -519,13 +525,15 @@ final class Pane: Identifiable {
         projectID: UUID,
         command: String? = nil,
         shell: String? = nil,
-        env: [String: String]? = nil
+        env: [String: String]? = nil,
+        sessionID: String = UUID().uuidString
     ) {
         self.projectPath = projectPath
         self.projectID = projectID
         self.command = command
         self.shell = shell
         self.env = env
+        self.sessionID = sessionID
         executionTracker = TerminalExecutionTracker(hasUserInteraction: command != nil)
     }
 }
