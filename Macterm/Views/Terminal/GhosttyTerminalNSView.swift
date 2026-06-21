@@ -19,6 +19,9 @@ final class GhosttyTerminalNSView: NSView {
     /// Shell binary to launch as the surface's program. nil → libghostty's
     /// default (resolved from the ghostty config / login shell).
     private let shell: String?
+    /// A full ghostty `command` (e.g. a `direct:zmx attach …` line) that runs as
+    /// the surface's program in place of the default shell. nil → use `shell`.
+    private let program: String?
     /// Extra environment variables for the spawned shell.
     private let env: [String: String]?
 
@@ -104,11 +107,18 @@ final class GhosttyTerminalNSView: NSView {
     private var keyTextAccumulator: [String] = []
     private var currentKeyEvent: NSEvent?
 
-    init(workingDirectory: String, command: String? = nil, shell: String? = nil, env: [String: String]? = nil) {
+    init(
+        workingDirectory: String,
+        command: String? = nil,
+        shell: String? = nil,
+        env: [String: String]? = nil,
+        program: String? = nil
+    ) {
         self.workingDirectory = workingDirectory
         self.command = command
         self.shell = shell
         self.env = env
+        self.program = program
         super.init(frame: .zero)
         setupTrackingArea()
         registerForDraggedTypes(Array(Self.dropTypes))
@@ -165,9 +175,13 @@ final class GhosttyTerminalNSView: NSView {
 
         config.working_directory = cString(workingDirectory)
 
-        // Shell binary → the surface's program. nil falls back to libghostty's
-        // own resolution (which honors the user's ghostty config / login shell).
-        if let resolvedShell = shell ?? GhosttyApp.shared.configuredShell {
+        // An explicit `program` (e.g. a zmx attach line) becomes the surface's
+        // program verbatim, replacing the default shell. Otherwise the shell
+        // binary → the surface's program; nil falls back to libghostty's own
+        // resolution (which honors the user's ghostty config / login shell).
+        if let program {
+            config.command = cString(program)
+        } else if let resolvedShell = shell ?? GhosttyApp.shared.configuredShell {
             config.command = cString(resolvedShell)
         }
 

@@ -36,6 +36,7 @@ private struct GeneralSettings: View {
     private var ghosttyConfigPath: String = Preferences.shared.userGhosttyConfigPath
 
     private let ghosttyCLI = GhosttyCLI.standard
+    private let zmxAvailable = ZmxService.standard.isAvailable
 
     var body: some View {
         Form {
@@ -87,16 +88,25 @@ private struct GeneralSettings: View {
             }
 
             Section("Session Persistence") {
-                Toggle("Restore running commands on relaunch", isOn: $sessionPersistenceEnabled)
+                Toggle("Restore sessions on relaunch", isOn: $sessionPersistenceEnabled)
                     .onChange(of: sessionPersistenceEnabled) { _, v in
                         Preferences.shared.sessionPersistenceEnabled = v
                     }
-                Text(
-                    "Remembers the command each pane was running and re-launches it when you reopen Macterm. "
-                        + "Note: the command is re-run fresh; live process state and scrollback are not preserved."
-                )
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                if zmxAvailable {
+                    Text(
+                        "zmx detected: panes reattach to their live processes, so editors, REPLs, and running "
+                            + "commands keep running across an app restart (not a reboot)."
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text(
+                        "Re-launches each pane's last command on relaunch (run fresh; live state and scrollback "
+                            + "are not preserved). Install zmx to reattach to the live processes instead."
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)

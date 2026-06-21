@@ -424,9 +424,28 @@ final class Pane: Identifiable {
 
     func ensureNSView() -> GhosttyTerminalNSView {
         if let existing = _nsView { return existing }
-        let view = GhosttyTerminalNSView(workingDirectory: projectPath, command: command, shell: shell, env: env)
+        // Resolve how to launch: a zmx attach line when session persistence is on
+        // and zmx is installed (live reattach), otherwise the native shell +
+        // re-run path. Read here (not at init) so toggling the pref takes effect
+        // on the next surface creation.
+        let attach = Self.zmxAttachCommand(for: sessionID)
+        let launch = PaneLaunch.resolve(attachCommand: attach, command: command, shell: shell)
+        let view = GhosttyTerminalNSView(
+            workingDirectory: projectPath,
+            command: launch.initialInput,
+            shell: launch.shell,
+            env: env,
+            program: launch.program
+        )
         _nsView = view
         return view
+    }
+
+    /// The zmx attach command backing this pane, or nil when session persistence
+    /// is off or zmx isn't installed (native shell then).
+    private static func zmxAttachCommand(for sessionID: String) -> String? {
+        guard Preferences.shared.sessionPersistenceEnabled else { return nil }
+        return ZmxService.standard.attachCommand(sessionID: sessionID)
     }
 
     var nsView: GhosttyTerminalNSView? { _nsView }
@@ -449,6 +468,14 @@ final class Pane: Identifiable {
     /// pane is removed from the tree. Safe to call multiple times.
     func destroySurface() {
         guard let view = _nsView else { return }
+        // A pane backed by a persistent zmx session is being closed by the user
+        // (destroySurface is the permanent-close path). End the session so it
+        // doesn't leak. App quit must NOT reach here that way — `isTerminating`
+        // means we're shutting down, where detaching should leave the session
+        // alive to reattach next launch.
+        if !AppTerminationState.isTerminating, Preferences.shared.sessionPersistenceEnabled {
+            ZmxService.standard.kill(sessionID: sessionID)
+        }
         // Null callbacks before destroy so any in-flight ghostty events
         // triggered by destroySurface() itself can't re-enter.
         view.onProcessExit = nil
