@@ -569,10 +569,16 @@ final class AppState {
             closeTab(tab.id, projectID: projectID)
         case .removed:
             saveWorkspaces()
-            // Restore first responder to the originating pane (removePane only
-            // updates the model's focusedPaneID; it doesn't move focus).
+            // Return focus to the originating pane when a scrollback-editor split
+            // closes. `focusPane` only updates the model's focusedPaneID, and the
+            // editor's NSView is still tearing down this runloop, so restore the
+            // first responder on the next tick so it sticks.
             if let editorOrigin, tab.splitRoot.findPane(id: editorOrigin) != nil {
                 focusPane(editorOrigin, projectID: projectID)
+                let window = NSApp.keyWindow ?? NSApp.mainWindow
+                DispatchQueue.main.async {
+                    FocusRestoration.restoreFocus(to: editorOrigin, in: tab.splitRoot, window: window)
+                }
             }
         case .notFound:
             break
