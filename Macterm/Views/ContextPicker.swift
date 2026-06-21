@@ -272,7 +272,9 @@ struct ContextPickerPanel: View {
             guard press.modifiers == .control else { return .ignored }
             return moveSelection(1)
         }
-        .onKeyPress(.tab) { completeQuery() }
+        .onKeyPress(keys: [.tab], phases: [.down, .repeat]) { press in
+            cycleSelection(press.modifiers.contains(.shift) ? -1 : 1)
+        }
         .onKeyPress(.escape) { handleEscape() }
     }
 
@@ -282,14 +284,13 @@ struct ContextPickerPanel: View {
         return .handled
     }
 
-    /// Tab autocompletes the search field to the top context match's name. No-op
-    /// in the directory phase or when the top row isn't a context — letting the
-    /// keypress fall through to default focus traversal.
-    private func completeQuery() -> KeyPress.Result {
-        guard case let .project(project) = rows.first,
-              project.name != appState.contextPickerQuery
-        else { return .ignored }
-        appState.contextPickerQuery = project.name
+    /// Tab cycles the selection through the matches (wrapping); Shift+Tab cycles
+    /// back. Always handled so Tab never escapes the picker into the terminal's
+    /// focus chain — the user commits the highlighted row with Enter.
+    private func cycleSelection(_ delta: Int) -> KeyPress.Result {
+        let count = rows.count
+        guard count > 0 else { return .handled }
+        selectedIndex = ((selectedIndex + delta) % count + count) % count
         return .handled
     }
 
