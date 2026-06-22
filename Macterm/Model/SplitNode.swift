@@ -434,7 +434,16 @@ final class Pane: Identifiable {
         // on the next surface creation. Ephemeral panes (e.g. the scrollback
         // editor) are never zmx-backed — they're throwaway views.
         let attach = ephemeral ? nil : Self.zmxAttachCommand(for: sessionID)
-        let launch = PaneLaunch.resolve(attachCommand: attach, command: command, shell: shell)
+        // After a reboot the daemon didn't survive, so this attach spawns a
+        // *fresh* session. Replace the plain attach with one that paints the
+        // saved scrollback before the shell starts (correct formatting; survives
+        // full-screen programs). No-op on app-quit relaunch (live reattach) or
+        // with persistence off.
+        var resolvedAttach = attach
+        if let base = attach, SessionResurrect.didReboot {
+            resolvedAttach = SessionResurrect.resumeAttachCommand(base: base, sessionID: sessionID) ?? base
+        }
+        let launch = PaneLaunch.resolve(attachCommand: resolvedAttach, command: command, shell: shell)
         let view = GhosttyTerminalNSView(
             workingDirectory: projectPath,
             command: launch.initialInput,
@@ -443,12 +452,9 @@ final class Pane: Identifiable {
             program: launch.program
         )
         _nsView = view
-        // If this is a zmx-backed pane being recreated after a reboot, `attach`
-        // just spawned a *fresh* session (the daemon didn't survive); seed it
-        // from the snapshot — replay color scrollback, re-run the command. No-op
-        // on an app-quit relaunch (live reattach) or with persistence off.
+        // Re-run the restartable command on top of the resurrected shell.
         if attach != nil {
-            SessionResurrect.seedIfRebooted(sessionID: sessionID, command: command)
+            SessionResurrect.seedCommandIfRebooted(sessionID: sessionID, command: command)
         }
         return view
     }

@@ -34,18 +34,54 @@ enum SessionResurrect {
     /// are live and never seeded.
     static var didReboot = false
 
-    /// Seed a freshly-created post-reboot session for `sessionID`. No-op unless
-    /// we rebooted, persistence is on, zmx is available, and there's something to
-    /// replay. Fire-and-forget from `Pane.ensureNSView` after the attach; all zmx
-    /// subprocess work runs off the main thread, so it never blocks the UI.
-    static func seedIfRebooted(sessionID: String, command: String?) {
-        guard didReboot, Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
-        let scrollback = ResurrectStore.scrollback(sessionID: sessionID)
-        guard scrollback != nil || command != nil else { return }
+    /// For a dead (post-reboot) session, a `zmx attach` *command* that paints the
+    /// saved scrollback before starting the login shell, or nil to fall back to a
+    /// plain attach (no saved scrollback, or anything went wrong).
+    ///
+    /// We do NOT inject scrollback with `zmx print` into a live shell: that lands
+    /// after the prompt (misformatted) and is clobbered by full-screen programs'
+    /// alternate-screen save/restore (so quitting `vi` showed nothing). Instead
+    /// the fresh session runs a tiny resume script — `cat <scrollback>; exec
+    /// $SHELL -l` — so the scrollback renders at the top of a clean screen and
+    /// the shell's prompt comes up beneath it, surviving alt-screen programs.
+    ///
+    /// The script and a sanitized scrollback file are written to the (space-free)
+    /// temp dir so the attach command word-splits cleanly in libghostty. Returns
+    /// `"<base> /bin/sh <scriptPath>"`. Called on the main thread from
+    /// `ensureNSView` (tiny synchronous writes).
+    nonisolated static func resumeAttachCommand(base: String, sessionID: String) -> String? {
+        guard let raw = ResurrectStore.scrollback(sessionID: sessionID) else { return nil }
+        let clean = cappedForReplay(sanitizeForReplay(raw))
+        guard !clean.isEmpty else { return nil }
+        let dir = NSTemporaryDirectory()
+        let sbPath = dir + "seshterm-sb-\(sessionID).vt"
+        let scriptPath = dir + "seshterm-resume-\(sessionID).sh"
+        // The attach command is word-split on spaces by libghostty, so the script
+        // path must be space-free; bail to a plain attach if the temp dir isn't.
+        guard !scriptPath.contains(" ") else { return nil }
+        let script = "cat '\(sbPath)' 2>/dev/null\nexec \"${SHELL:-/bin/zsh}\" -l\n"
+        do {
+            try clean.write(toFile: sbPath, atomically: true, encoding: .utf8)
+            try script.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+        } catch {
+            logger.error("resume script write failed for \(sessionID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        return "\(base) /bin/sh \(scriptPath)"
+    }
+
+    /// Re-run the restartable command in a freshly-resurrected session. Scrollback
+    /// is handled by `resumeAttachCommand`; this only sends the command, once the
+    /// shell has settled at its prompt. No-op unless we rebooted, persistence is
+    /// on, zmx is available, and there's a command. Fire-and-forget; off-main.
+    static func seedCommandIfRebooted(sessionID: String, command: String?) {
+        guard didReboot, Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable,
+              let command, !command.isEmpty
+        else { return }
         Task.detached(priority: .utility) {
             let zmx = ZmxService.standard
-            // 1. Wait for our own attach to create the fresh session. Patient —
-            //    background-tab panes attach well after launch.
+            // Wait for our own attach to create the fresh session (patient —
+            // background-tab panes attach well after launch).
             var appeared = false
             for _ in 0 ..< 40 {
                 try? await Task.sleep(nanoseconds: 300_000_000)
@@ -58,29 +94,19 @@ enum SessionResurrect {
                 logger.error("resurrect seed timed out waiting for session \(sessionID, privacy: .public)")
                 return
             }
-            // 2. Wait for the login shell to FINISH initializing and settle at its
-            //    prompt before injecting. A fixed delay is unreliable: shells take
-            //    varying time to load rc files / prompt frameworks, especially
-            //    with many starting at once, so bytes sent too early are dropped
-            //    or wiped by the prompt redraw (the flaky only-some-panes bug).
-            //    Readiness proxy: the session's scrollback goes non-empty and
-            //    then stops growing between reads.
+            // Wait for the login shell to settle at its prompt before sending —
+            // a too-early write is dropped. Readiness proxy: the session's
+            // scrollback goes non-empty (resume script's cat output, then prompt)
+            // and stops growing between reads.
             var lastLen = -1
             for _ in 0 ..< 30 {
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 let len = zmx.history(sessionID: sessionID)?.count ?? 0
-                if len > 0, len == lastLen { break } // prompt drawn and idle
+                if len > 0, len == lastLen { break }
                 lastLen = len
             }
-            if let scrollback, !scrollback.isEmpty {
-                let clean = cappedForReplay(sanitizeForReplay(scrollback))
-                if !clean.isEmpty { zmx.print(sessionID: sessionID, text: clean) }
-            }
-            if let command, !command.isEmpty {
-                // Let the shell process the printed bytes before it reads input.
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                zmx.send(sessionID: sessionID, text: command + "\r")
-            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            zmx.send(sessionID: sessionID, text: command + "\r")
             logger.info("resurrected session \(sessionID, privacy: .public)")
         }
     }
