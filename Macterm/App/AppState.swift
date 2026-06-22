@@ -272,35 +272,55 @@ final class AppState {
         return ids
     }
 
-    /// Snapshot each live zmx-backed pane's color scrollback to disk and refresh
-    /// the restartable-command cache `snapshot` reads, so a post-reboot restore
-    /// can replay both. No-op when persistence is off or zmx is absent.
+    /// Snapshot each live zmx-backed pane's scrollback to disk and refresh the
+    /// restartable-command cache `snapshot` reads, so a post-reboot restore can
+    /// replay both. No-op when persistence is off or zmx is absent.
     ///
-    /// The zmx calls (`list`/`history`) spawn subprocesses, so they run off the
-    /// main thread — NEVER inline in `saveWorkspaces`, which fires many times
-    /// during launch and would otherwise stall the UI (and block app launch if a
-    /// spawn hangs). Driven by `resurrectTimer` (~15s); results applied on main.
+    /// Scrollback is read **in-process** from each pane's own ghostty surface
+    /// (`readScrollback` → `ghostty_surface_read_text`): the full history that
+    /// streamed through zmx, not zmx's one-screen `--vt` snapshot — far more
+    /// reliable, and no subprocess. Panes in a full-screen / raw-mode program are
+    /// skipped (their surface shows the program's UI, not shell history), keeping
+    /// the last good capture. The command lookup still needs zmx — the surface's
+    /// foreground pid is the zmx *client*, not the program — so it runs off-main.
+    /// Driven by `resurrectTimer` (~15s); results applied on main.
     func captureResurrectState() {
         guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
+        // In-process scrollback read (main thread). Skip full-screen TUIs so we
+        // capture shell history, not e.g. an editor's UI.
+        var scrollbacks: [String: String] = [:]
+        for ws in workspaces.values {
+            for tab in ws.tabs {
+                for pane in tab.splitRoot.allPanes() where !pane.ephemeral {
+                    guard !ProcessInspector.terminalInputIsRaw(forPane: pane),
+                          let text = pane.nsView?.readScrollback(), !text.isEmpty
+                    else { continue }
+                    scrollbacks[pane.sessionID] = text
+                }
+            }
+        }
         let referenced = referencedSessionIDs()
         guard !referenced.isEmpty else { return }
         Task.detached(priority: .utility) {
+            // Persist freshly-read scrollback (off-main IO). Skipped panes keep
+            // their previous file — prune retains every referenced id.
+            for (id, text) in scrollbacks {
+                ResurrectStore.write(sessionID: id, scrollback: text)
+            }
+            ResurrectStore.prune(keeping: referenced)
+            // Restartable-command lookup via zmx introspection (subprocess).
             let zmx = ZmxService.standard
             let pidByID = Dictionary(
                 uniqueKeysWithValues: zmx.list().filter(\.isHealthy).compactMap { s in s.pid.map { (s.name, $0) } }
             )
             var commands: [String: String] = [:]
-            for id in referenced where pidByID[id] != nil {
-                if let vt = zmx.history(sessionID: id) {
-                    ResurrectStore.write(sessionID: id, scrollback: vt)
-                }
+            for id in referenced {
                 if let pid = pidByID[id],
                    let cmd = RestartableCommand.restartable(ProcessInspector.foregroundCommand(ofSessionPID: pid))
                 {
                     commands[id] = cmd
                 }
             }
-            ResurrectStore.prune(keeping: referenced)
             await MainActor.run {
                 self.capturedResurrectCommands = commands
                 self.saveWorkspaces()

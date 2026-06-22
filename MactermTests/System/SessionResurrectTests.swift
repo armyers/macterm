@@ -43,6 +43,13 @@ struct SessionResurrectTests {
     }
 
     @Test
+    func trims_trailing_blank_lines_but_keeps_interior() {
+        let input = "line one\n\nline two\n   \n\t\n\n"
+        let out = SessionResurrect.trimTrailingBlankLines(input)
+        #expect(out == "line one\n\nline two") // interior blank kept, trailing dropped
+    }
+
+    @Test
     func boot_time_is_readable_and_positive() {
         // Sanity: kern.boottime resolves to a plausible epoch second.
         let boot = SystemBootTime.current()

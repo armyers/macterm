@@ -23,10 +23,11 @@ enum SystemBootTime {
 /// On an app quit the daemon survives, so `zmx attach <id>` reattaches to the
 /// still-live session — scrollback and the running process are intact, nothing
 /// to do. On a reboot the daemon is gone, so that same attach creates a *fresh*
-/// login shell; we then seed it from the snapshot: replay the saved color
-/// scrollback (the shell's persistent context), then re-run the restartable
-/// program on top — so quitting the program drops back into the shell with its
-/// history, exactly like tmux-resurrect.
+/// login shell; we then seed it from the snapshot: replay the saved scrollback
+/// (the shell's persistent context, captured in-process via the surface's
+/// `read_text` — plain text for now; color is a follow-up), then re-run the
+/// restartable program on top — so quitting the program drops back into the
+/// shell with its history, like tmux-resurrect.
 @MainActor
 enum SessionResurrect {
     /// Whether the machine rebooted since the workspace was last saved. Set once
@@ -51,7 +52,9 @@ enum SessionResurrect {
     /// `ensureNSView` (tiny synchronous writes).
     nonisolated static func resumeAttachCommand(base: String, sessionID: String) -> String? {
         guard let raw = ResurrectStore.scrollback(sessionID: sessionID) else { return nil }
-        let clean = cappedForReplay(sanitizeForReplay(raw))
+        // `read_text` pads with trailing blank rows; trim them BEFORE capping so
+        // the cap keeps real content (the tail) rather than empty lines.
+        let clean = cappedForReplay(sanitizeForReplay(trimTrailingBlankLines(raw)))
         guard !clean.isEmpty else { return nil }
         let dir = NSTemporaryDirectory()
         let sbPath = dir + "seshterm-sb-\(sessionID).vt"
@@ -112,13 +115,13 @@ enum SessionResurrect {
         }
     }
 
-    /// Strip a captured `zmx history --vt` dump down to what's safe to *replay*
-    /// as scrollback: SGR color sequences, printable text, and newlines. The
-    /// dump is a screen snapshot — it carries absolute cursor moves, erases, DEC
-    /// private modes (e.g. bracketed paste), and OSC that, replayed via `print`,
-    /// reposition and overwrite rather than append, so nothing readable lands
-    /// (the cause of "scrollback not restored"). Keeping only SGR + text turns it
-    /// into clean colored lines; CR / CRLF are normalized to LF.
+    /// Normalize captured scrollback for replay: keep SGR color sequences,
+    /// printable text, and newlines; drop cursor moves, erases, DEC private
+    /// modes, and OSC; normalize every CR / LF / CRLF to an explicit CRLF.
+    /// Scrollback now comes from `read_text` (plain text), so the escape-
+    /// stripping is mostly defensive — but it stays correct if a future styled
+    /// `read_text` emits SGR, and the CRLF normalization is what fixes the
+    /// "staircase" when the text is `cat` into the pre-shell pty (no ONLCR).
     nonisolated static func sanitizeForReplay(_ vt: String) -> String {
         let s = Array(vt.unicodeScalars)
         let n = s.count
@@ -183,6 +186,18 @@ enum SessionResurrect {
     /// under `ARG_MAX` when passed to `zmx print`. Keeps the most recent *whole*
     /// lines within the budget — never cutting mid-line (which would split a
     /// color escape) or mid-codepoint.
+    /// Drop trailing blank / whitespace-only lines. `ghostty_surface_read_text`
+    /// returns the whole screen region, so the live screen's empty rows below the
+    /// prompt come through as blank trailing lines; replaying them would push the
+    /// real history off-screen (and defeat the tail-based cap).
+    nonisolated static func trimTrailingBlankLines(_ text: String) -> String {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n")
+    }
+
     nonisolated static func cappedForReplay(_ vt: String, maxBytes: Int = 64 * 1024) -> String {
         guard vt.utf8.count > maxBytes else { return vt }
         var kept: [Substring] = []
