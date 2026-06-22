@@ -44,25 +44,40 @@ enum SessionResurrect {
         guard scrollback != nil || command != nil else { return }
         Task.detached(priority: .utility) {
             let zmx = ZmxService.standard
-            // Wait for our own attach to bring the fresh session up (bounded).
-            var ready = false
-            for _ in 0 ..< 20 {
-                try? await Task.sleep(nanoseconds: 250_000_000)
+            // 1. Wait for our own attach to create the fresh session. Patient —
+            //    background-tab panes attach well after launch.
+            var appeared = false
+            for _ in 0 ..< 40 {
+                try? await Task.sleep(nanoseconds: 300_000_000)
                 if zmx.list().contains(where: { $0.name == sessionID && $0.isHealthy }) {
-                    ready = true
+                    appeared = true
                     break
                 }
             }
-            guard ready else {
+            guard appeared else {
                 logger.error("resurrect seed timed out waiting for session \(sessionID, privacy: .public)")
                 return
             }
-            // Let the login shell draw its first prompt before injecting.
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // 2. Wait for the login shell to FINISH initializing and settle at its
+            //    prompt before injecting. A fixed delay is unreliable: shells take
+            //    varying time to load rc files / prompt frameworks, especially
+            //    with many starting at once, so bytes sent too early are dropped
+            //    or wiped by the prompt redraw (the flaky only-some-panes bug).
+            //    Readiness proxy: the session's scrollback goes non-empty and
+            //    then stops growing between reads.
+            var lastLen = -1
+            for _ in 0 ..< 30 {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                let len = zmx.history(sessionID: sessionID)?.count ?? 0
+                if len > 0, len == lastLen { break } // prompt drawn and idle
+                lastLen = len
+            }
             if let scrollback, !scrollback.isEmpty {
                 zmx.print(sessionID: sessionID, text: cappedForReplay(scrollback))
             }
             if let command, !command.isEmpty {
+                // Let the shell process the printed bytes before it reads input.
+                try? await Task.sleep(nanoseconds: 150_000_000)
                 zmx.send(sessionID: sessionID, text: command + "\r")
             }
             logger.info("resurrected session \(sessionID, privacy: .public)")
