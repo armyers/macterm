@@ -70,6 +70,37 @@ enum ProcessInspector {
         return pid
     }
 
+    /// The full foreground command running inside a zmx session, derived from
+    /// the session's login-shell pid (reported by `zmx list`). zmx owns the
+    /// process tree in a daemon, so there's no surface pid to read — instead we
+    /// follow the shell's controlling tty to its foreground process-group leader
+    /// and read that pid's argv. Returns nil when the session is idle at its
+    /// shell prompt (the foreground is the shell itself) or anything is
+    /// unreadable. The string matches `runningCommand`'s shape (resolved argv
+    /// joined with spaces), so the resurrect path and layout `save` agree.
+    static func foregroundCommand(ofSessionPID sessionPID: pid_t) -> String? {
+        guard let ttyPath = controllingTTYPath(pid: sessionPID) else { return nil }
+        let fd = open(ttyPath, O_RDONLY | O_NOCTTY | O_NONBLOCK)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        let fpgid = tcgetpgrp(fd)
+        guard fpgid > 0 else { return nil }
+        guard let args = argv(pid: fpgid), let first = args.first, !isShell(first) else { return nil }
+        return displayCommand(args)
+    }
+
+    /// The `/dev/tty…` path of `pid`'s controlling terminal
+    /// (`proc_bsdinfo.e_tdev` → `devname`), or nil when it has none.
+    private static func controllingTTYPath(pid: pid_t) -> String? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        guard info.e_tdev != 0, info.e_tdev != UInt32.max else { return nil }
+        let dev = dev_t(Int32(bitPattern: info.e_tdev))
+        guard let name = devname(dev, mode_t(S_IFCHR)) else { return nil }
+        return "/dev/" + String(cString: name)
+    }
+
     /// Whether the pane's foreground process is a shell. Prefer the process's
     /// executable/argv path over its display name; the shell set itself comes
     /// from the host (`getusershell`, login shell, `$SHELL`) rather than a

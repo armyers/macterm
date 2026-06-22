@@ -104,6 +104,18 @@ final class AppState {
     @ObservationIgnored
     private var processNameTimer: Timer?
 
+    /// Periodic capture of zmx-backed panes' color scrollback (for post-reboot
+    /// resurrect), plus a workspace save. Fires ~every 15s — far slower than the
+    /// process poll, since it shells out to `zmx history` per pane.
+    @ObservationIgnored
+    private var resurrectTimer: Timer?
+
+    /// sessionID → restartable foreground command, refreshed off-main by
+    /// `captureResurrectState`. `saveWorkspaces` reads this cache so a snapshot
+    /// never has to spawn a zmx subprocess on the (main) save path.
+    @ObservationIgnored
+    private var capturedResurrectCommands: [String: String] = [:]
+
     init(workspaceStore: WorkspaceStore = WorkspaceStore()) {
         self.workspaceStore = workspaceStore
         autoTileObserver = NotificationCenter.default.addObserver(
@@ -122,6 +134,12 @@ final class AppState {
         }
         RunLoop.main.add(timer, forMode: .common)
         processNameTimer = timer
+
+        let resurrect = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.captureResurrectState() }
+        }
+        RunLoop.main.add(resurrect, forMode: .common)
+        resurrectTimer = resurrect
     }
 
     /// Re-read the foreground process name of every live pane across all
@@ -204,10 +222,87 @@ final class AppState {
             acknowledgeActiveTab(projectID: id)
             warmFocusedProject()
         }
+        // Reap leftover UUID sessions now that every restored pane's sessionID
+        // is known (referenced sessions are preserved for reattach/resurrect).
+        garbageCollectOrphanedSessions()
     }
 
     func saveWorkspaces() {
-        workspaceStore.save(WorkspaceSerializer.snapshot(workspaces))
+        workspaceStore.save(WorkspaceSerializer.snapshot(workspaces, resurrectCommands: capturedResurrectCommands))
+    }
+
+    // MARK: - Reboot resurrect (capture + GC)
+
+    /// Every sessionID referenced by a live pane across all workspaces (skipping
+    /// ephemeral panes, which never persist). Used to decide which scrollback
+    /// files to keep and which orphaned zmx sessions to reap.
+    private func referencedSessionIDs() -> Set<String> {
+        var ids: Set<String> = []
+        for ws in workspaces.values {
+            for tab in ws.tabs {
+                for pane in tab.splitRoot.allPanes() where !pane.ephemeral {
+                    ids.insert(pane.sessionID)
+                }
+            }
+        }
+        return ids
+    }
+
+    /// Snapshot each live zmx-backed pane's color scrollback to disk and refresh
+    /// the restartable-command cache `snapshot` reads, so a post-reboot restore
+    /// can replay both. No-op when persistence is off or zmx is absent.
+    ///
+    /// The zmx calls (`list`/`history`) spawn subprocesses, so they run off the
+    /// main thread — NEVER inline in `saveWorkspaces`, which fires many times
+    /// during launch and would otherwise stall the UI (and block app launch if a
+    /// spawn hangs). Driven by `resurrectTimer` (~15s); results applied on main.
+    func captureResurrectState() {
+        guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
+        let referenced = referencedSessionIDs()
+        guard !referenced.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            let zmx = ZmxService.standard
+            let pidByID = Dictionary(
+                uniqueKeysWithValues: zmx.list().filter(\.isHealthy).compactMap { s in s.pid.map { (s.name, $0) } }
+            )
+            var commands: [String: String] = [:]
+            for id in referenced where pidByID[id] != nil {
+                if let vt = zmx.history(sessionID: id) {
+                    ResurrectStore.write(sessionID: id, scrollback: vt)
+                }
+                if let pid = pidByID[id],
+                   let cmd = RestartableCommand.restartable(ProcessInspector.foregroundCommand(ofSessionPID: pid))
+                {
+                    commands[id] = cmd
+                }
+            }
+            ResurrectStore.prune(keeping: referenced)
+            await MainActor.run {
+                self.capturedResurrectCommands = commands
+                self.saveWorkspaces()
+            }
+        }
+    }
+
+    /// On launch, reap orphaned zmx sessions Seshterm created — UUID-named
+    /// sessions the daemon kept alive across an app quit that no restored pane
+    /// references. Never touches the user's own named sessions (non-UUID names)
+    /// or sessions still in use. The zmx subprocess work runs off the main
+    /// thread so it never blocks launch. No-op when persistence is off / no zmx.
+    private func garbageCollectOrphanedSessions() {
+        guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
+        let referenced = referencedSessionIDs()
+        Task.detached(priority: .utility) {
+            let zmx = ZmxService.standard
+            for session in zmx.list() {
+                // Only Seshterm-generated sessions (UUID names) are eligible —
+                // leave the user's `zmx attach mysession` alone.
+                guard UUID(uuidString: session.name) != nil, !referenced.contains(session.name) else { continue }
+                logger.info("GC orphaned zmx session: \(session.name, privacy: .public)")
+                zmx.kill(sessionID: session.name, force: true)
+            }
+            ResurrectStore.prune(keeping: referenced)
+        }
     }
 
     // MARK: - Project

@@ -76,4 +76,52 @@ struct ZmxServiceTests {
         #expect(launch.shell == nil)
         #expect(launch.initialInput == nil)
     }
+
+    // MARK: - list parsing
+
+    @Test
+    func parses_healthy_session_line() {
+        let out = "  name=ABC-123\tpid=35444\tclients=0\tcreated=1782072493\tstart_dir=/Users/me/.config\n"
+        let sessions = ZmxService.parseList(out)
+        #expect(sessions.count == 1)
+        let s = sessions[0]
+        #expect(s.name == "ABC-123")
+        #expect(s.pid == 35444)
+        #expect(s.clients == 0)
+        #expect(s.startDir == "/Users/me/.config")
+        #expect(s.isHealthy)
+    }
+
+    @Test
+    func captures_start_dir_with_spaces_to_end_of_line() {
+        let out = "name=X\tpid=10\tclients=1\tstart_dir=/Users/me/My Code/proj\n"
+        let s = ZmxService.parseList(out)[0]
+        #expect(s.startDir == "/Users/me/My Code/proj")
+        #expect(s.pid == 10)
+    }
+
+    @Test
+    func dead_session_is_unhealthy_with_no_pid() {
+        let out = "name=DEAD-1\terr=connection refused\tstatus=unreachable\n"
+        let s = ZmxService.parseList(out)[0]
+        #expect(s.name == "DEAD-1")
+        #expect(s.pid == nil)
+        #expect(!s.isHealthy)
+    }
+
+    @Test
+    func parses_multiple_lines_and_skips_blanks() {
+        let out = """
+          name=A\tpid=1\tclients=0\tstart_dir=/a
+
+          name=B\tpid=2\tclients=0\tstart_dir=/b
+        """
+        let sessions = ZmxService.parseList(out)
+        #expect(sessions.map(\.name) == ["A", "B"])
+    }
+
+    @Test
+    func ignores_lines_without_name() {
+        #expect(ZmxService.parseList("no sessions\n").isEmpty)
+    }
 }

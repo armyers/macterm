@@ -100,8 +100,9 @@ private struct GeneralSettings: View {
                     }
                 if zmxAvailable {
                     Text(
-                        "zmx detected: panes reattach to their live processes, so editors, REPLs, and running "
-                            + "commands keep running across an app restart (not a reboot)."
+                        "zmx detected: panes reattach to their live processes across an app restart, so editors, "
+                            + "REPLs, and running commands keep running. Across a reboot, each pane's color "
+                            + "scrollback is replayed and editors/pagers are relaunched."
                     )
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)

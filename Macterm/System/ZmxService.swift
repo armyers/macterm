@@ -33,26 +33,96 @@ struct ZmxService {
         return "\(bin) attach \(sessionID)"
     }
 
-    /// Permanently end a session — used when the user closes a pane. App quit
-    /// must NOT call this: detaching leaves the session alive to reattach.
-    /// Fire-and-forget; harmless if the session doesn't exist.
-    func kill(sessionID: String) {
-        guard let bin = resolveBinary() else { return }
+    /// Permanently end a session — used when the user closes a pane, or to GC
+    /// orphaned sessions. App quit must NOT call this: detaching leaves the
+    /// session alive to reattach. Fire-and-forget; harmless if absent.
+    func kill(sessionID: String, force: Bool = false) {
+        var args = ["kill", "--", sessionID]
+        if force { args = ["kill", "--force", "--", sessionID] }
+        _ = run(args)
+    }
+
+    /// Live sessions the daemon knows about (`zmx list`), parsed. Empty when zmx
+    /// isn't installed or the daemon isn't running.
+    func list() -> [ZmxSession] {
+        guard let output = run(["list"]) else { return [] }
+        return Self.parseList(output)
+    }
+
+    /// The session's scrollback as ANSI (`zmx history <id> --vt`), capped to the
+    /// last `maxLines` lines so the saved file stays bounded. nil on failure.
+    func history(sessionID: String, maxLines: Int = 2000) -> String? {
+        guard let output = run(["history", sessionID, "--vt"]) else { return nil }
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+        let tail = lines.suffix(maxLines)
+        return tail.joined(separator: "\n")
+    }
+
+    /// Run `zmx <args>`, returning stdout (nil if zmx is absent or fails to
+    /// launch). Used for the read/introspection commands.
+    private func run(_ args: [String]) -> String? {
+        guard let bin = resolveBinary() else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: bin)
-        process.arguments = ["kill", sessionID]
-        process.standardOutput = Pipe()
+        process.arguments = args
+        let pipe = Pipe()
+        process.standardOutput = pipe
         process.standardError = Pipe()
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
-            logger.error("zmx kill failed at \(bin, privacy: .public): \(String(describing: error), privacy: .public)")
+            logger.error("zmx \(args.first ?? "", privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            return nil
         }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8)
     }
 }
 
+/// One row of `zmx list`. `isHealthy` is false for the daemon's dead/tombstone
+/// entries (`status=unreachable` / `err=…`), which carry no pid.
+struct ZmxSession: Equatable {
+    let name: String
+    let pid: pid_t?
+    let startDir: String?
+    let clients: Int?
+    let isHealthy: Bool
+}
+
 extension ZmxService {
+    /// Parse `zmx list` output. Each line is whitespace/tab-separated `key=value`
+    /// pairs: `name=… pid=… clients=… created=… start_dir=…`, or for dead
+    /// sessions `name=… err=… status=unreachable`. `start_dir` (a path, may
+    /// contain spaces) is taken as the remainder of the line. Pure — unit-tested.
+    static func parseList(_ output: String) -> [ZmxSession] {
+        output.split(whereSeparator: \.isNewline).compactMap { rawLine -> ZmxSession? in
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.contains("name=") else { return nil }
+            var startDir: String?
+            var head = line
+            if let r = line.range(of: "start_dir=") {
+                startDir = String(line[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+                head = String(line[..<r.lowerBound])
+            }
+            var fields: [String: String] = [:]
+            for token in head.split(whereSeparator: { $0 == " " || $0 == "\t" }) {
+                guard let eq = token.firstIndex(of: "=") else { continue }
+                fields[String(token[..<eq])] = String(token[token.index(after: eq)...])
+            }
+            guard let name = fields["name"] else { return nil }
+            let pid = fields["pid"].flatMap { pid_t($0) }
+            let healthy = fields["status"] != "unreachable" && fields["err"] == nil && pid != nil
+            return ZmxSession(
+                name: name,
+                pid: pid,
+                startDir: startDir,
+                clients: fields["clients"].flatMap { Int($0) },
+                isHealthy: healthy
+            )
+        }
+    }
+
     /// The detector Macterm uses at runtime: the common install locations for
     /// Homebrew (Apple Silicon + Intel), MacPorts, and cargo.
     static var standard: ZmxService {
