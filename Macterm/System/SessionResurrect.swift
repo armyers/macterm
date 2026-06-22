@@ -160,12 +160,15 @@ enum SessionResurrect {
                     i += 2
                     continue
                 }
-            } else if c == "\r" {
-                if i + 1 < n, s[i + 1] == "\n" { i += 1
-                    continue
-                } // CRLF → LF
-                out.append("\n") // lone CR → LF
-                i += 1
+            } else if c == "\r" || c == "\n" {
+                // Normalize CR / LF / CRLF to an explicit CRLF. The replayed text
+                // is `cat`'d into the fresh session before the shell sets up the
+                // tty, where there's no ONLCR translation — bare LF would move
+                // down without returning to column 0 (the "staircase" bug).
+                out.append("\r")
+                out.append("\n")
+                if c == "\r", i + 1 < n, s[i + 1] == "\n" { i += 2 } // consume CRLF pair
+                else { i += 1 }
                 continue
             } else {
                 out.append(c)

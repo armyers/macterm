@@ -31,7 +31,8 @@ struct SessionResurrectTests {
         #expect(!clean.contains("\(esc)[2J")) // clear-screen stripped
         #expect(!clean.contains("\(esc)[H")) // cursor-home stripped
         #expect(!clean.contains("\(esc)[2;8H")) // absolute position stripped
-        #expect(!clean.contains("\r")) // CR/CRLF normalized to LF
+        #expect(clean.contains("text\r\nmore")) // line breaks emitted as CRLF
+        #expect(clean.hasSuffix("\r\n")) // trailing lone CR normalized to CRLF
     }
 
     @Test
