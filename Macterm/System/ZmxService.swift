@@ -58,6 +58,19 @@ struct ZmxService {
         return tail.joined(separator: "\n")
     }
 
+    /// Inject `text` into the session's terminal display (`zmx print`), preserving
+    /// ANSI/color. Used to replay saved scrollback into a fresh post-reboot
+    /// session. Raw bytes, not pty input — doesn't run anything.
+    func print(sessionID: String, text: String) {
+        _ = run(["print", sessionID, text])
+    }
+
+    /// Send raw input to the session's pty (`zmx send`), as if typed. Used to
+    /// re-run the restartable command after a reboot (append `\r` to submit).
+    func send(sessionID: String, text: String) {
+        _ = run(["send", sessionID, text])
+    }
+
     /// Run `zmx <args>`, returning stdout (nil if zmx is absent or fails to
     /// launch). Used for the read/introspection commands.
     private func run(_ args: [String]) -> String? {
@@ -91,24 +104,19 @@ struct ZmxSession: Equatable {
 }
 
 extension ZmxService {
-    /// Parse `zmx list` output. Each line is whitespace/tab-separated `key=value`
-    /// pairs: `name=… pid=… clients=… created=… start_dir=…`, or for dead
-    /// sessions `name=… err=… status=unreachable`. `start_dir` (a path, may
-    /// contain spaces) is taken as the remainder of the line. Pure — unit-tested.
+    /// Parse `zmx list` output. Each line is TAB-separated `key=value` pairs:
+    /// `name=… pid=… clients=… created=… start_dir=…` (plus a trailing `cmd=…`
+    /// for sessions started with a command), or for dead sessions
+    /// `name=… err=… status=unreachable`. Splitting on TAB (not spaces) keeps a
+    /// `start_dir` path with spaces intact and isolates the trailing `cmd`.
+    /// Pure — unit-tested.
     static func parseList(_ output: String) -> [ZmxSession] {
         output.split(whereSeparator: \.isNewline).compactMap { rawLine -> ZmxSession? in
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard line.contains("name=") else { return nil }
-            var startDir: String?
-            var head = line
-            if let r = line.range(of: "start_dir=") {
-                startDir = String(line[r.upperBound...]).trimmingCharacters(in: .whitespaces)
-                head = String(line[..<r.lowerBound])
-            }
             var fields: [String: String] = [:]
-            for token in head.split(whereSeparator: { $0 == " " || $0 == "\t" }) {
-                guard let eq = token.firstIndex(of: "=") else { continue }
-                fields[String(token[..<eq])] = String(token[token.index(after: eq)...])
+            for token in rawLine.split(separator: "\t") {
+                let t = token.trimmingCharacters(in: .whitespaces)
+                guard let eq = t.firstIndex(of: "=") else { continue }
+                fields[String(t[..<eq])] = String(t[t.index(after: eq)...])
             }
             guard let name = fields["name"] else { return nil }
             let pid = fields["pid"].flatMap { pid_t($0) }
@@ -116,7 +124,7 @@ extension ZmxService {
             return ZmxSession(
                 name: name,
                 pid: pid,
-                startDir: startDir,
+                startDir: fields["start_dir"],
                 clients: fields["clients"].flatMap { Int($0) },
                 isHealthy: healthy
             )

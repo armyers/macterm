@@ -43,6 +43,13 @@ final class AppState {
     private var projectRecency = RecencyStack<UUID>(limit: 50)
     private let recencyKey = "macterm.projectRecency"
 
+    /// `kern.boottime` at launch, persisted on every save. Comparing the stored
+    /// value to this launch's tells `restoreSelection` whether the machine
+    /// rebooted since the last save (so zmx sessions are dead and need seeding).
+    private let bootTimeKey = "macterm.resurrect.lastBootTime"
+    @ObservationIgnored
+    private let bootTimeAtLaunch = SystemBootTime.current()
+
     /// Maps a scrollback-editor pane to the pane its scrollback came from, so
     /// focus returns there when the editor split closes (`editScrollback`).
     @ObservationIgnored
@@ -197,6 +204,14 @@ final class AppState {
     func restoreSelection(projects: [Project]) {
         logger.info("restoreSelection: \(projects.count, privacy: .public) projects")
         hasRestoredSelection = true
+        // Decide live-vs-dead for restored zmx sessions BEFORE any surface is
+        // created (warmFocusedProject attaches them). A reboot kills the daemon,
+        // so the boot time changes; matching boot times mean the daemon survived
+        // an app quit and sessions reattach live. Must be set before ensureNSView
+        // runs, since that's where dead sessions are seeded.
+        let storedBoot = UserDefaults.standard.object(forKey: bootTimeKey) as? Int
+        SessionResurrect.didReboot = storedBoot != nil && bootTimeAtLaunch != nil && storedBoot != bootTimeAtLaunch
+        logger.info("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public)")
         let snapshots = workspaceStore.load()
         let valid = Set(projects.map(\.id))
         // A committed layout file is the source of truth: skip restoring the
@@ -229,6 +244,9 @@ final class AppState {
 
     func saveWorkspaces() {
         workspaceStore.save(WorkspaceSerializer.snapshot(workspaces, resurrectCommands: capturedResurrectCommands))
+        // Record the boot time these sessions belong to, so the next launch can
+        // tell whether the machine rebooted (sessions dead) or not (reattach).
+        UserDefaults.standard.set(bootTimeAtLaunch, forKey: bootTimeKey)
     }
 
     // MARK: - Reboot resurrect (capture + GC)

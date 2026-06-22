@@ -124,4 +124,15 @@ struct ZmxServiceTests {
     func ignores_lines_without_name() {
         #expect(ZmxService.parseList("no sessions\n").isEmpty)
     }
+
+    @Test
+    func trailing_cmd_field_does_not_pollute_start_dir() {
+        // Sessions started with a command carry a trailing `cmd=…` after
+        // `start_dir=…`; splitting on TAB keeps start_dir clean.
+        let out = "name=X\tpid=5\tclients=1\tstart_dir=/tmp\tcmd=top\n"
+        let s = ZmxService.parseList(out)[0]
+        #expect(s.startDir == "/tmp")
+        #expect(s.pid == 5)
+        #expect(s.isHealthy)
+    }
 }

@@ -443,6 +443,13 @@ final class Pane: Identifiable {
             program: launch.program
         )
         _nsView = view
+        // If this is a zmx-backed pane being recreated after a reboot, `attach`
+        // just spawned a *fresh* session (the daemon didn't survive); seed it
+        // from the snapshot — replay color scrollback, re-run the command. No-op
+        // on an app-quit relaunch (live reattach) or with persistence off.
+        if attach != nil {
+            SessionResurrect.seedIfRebooted(sessionID: sessionID, command: command)
+        }
         return view
     }
 
