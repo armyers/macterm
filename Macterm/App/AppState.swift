@@ -315,8 +315,8 @@ final class AppState {
                 ResurrectStore.write(sessionID: id, scrollback: text)
             }
             ResurrectStore.prune(keeping: referenced)
-            logger
-                .info("captureResurrectState: captured \(scrollbacks.count, privacy: .public) panes, \(busy.count, privacy: .public) busy")
+            let busyCmds = commands.values.joined(separator: " | ")
+            logger.info("captureResurrectState: captured \(scrollbacks.count, privacy: .public), busy=[\(busyCmds, privacy: .public)]")
             await MainActor.run {
                 self.capturedResurrectCommands = commands
                 self.saveWorkspaces()
