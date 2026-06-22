@@ -134,8 +134,18 @@ private struct SplitLeafView: View {
                 onZoomRequest: onZoomRequest
             )
             .overlay {
+                // Dim inactive panes so the active one stands out.
                 if !isFocused, isSplit {
-                    Color.black.opacity(0.2)
+                    Color.black.opacity(0.45)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                // Accent border around the active pane (zellij-style), only when
+                // there's more than one pane to distinguish.
+                if isFocused, isSplit {
+                    Rectangle()
+                        .strokeBorder(MactermTheme.accent, lineWidth: 2)
                         .allowsHitTesting(false)
                 }
             }
