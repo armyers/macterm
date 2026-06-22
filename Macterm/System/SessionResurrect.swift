@@ -73,7 +73,8 @@ enum SessionResurrect {
                 lastLen = len
             }
             if let scrollback, !scrollback.isEmpty {
-                zmx.print(sessionID: sessionID, text: cappedForReplay(scrollback))
+                let clean = cappedForReplay(sanitizeForReplay(scrollback))
+                if !clean.isEmpty { zmx.print(sessionID: sessionID, text: clean) }
             }
             if let command, !command.isEmpty {
                 // Let the shell process the printed bytes before it reads input.
@@ -82,6 +83,70 @@ enum SessionResurrect {
             }
             logger.info("resurrected session \(sessionID, privacy: .public)")
         }
+    }
+
+    /// Strip a captured `zmx history --vt` dump down to what's safe to *replay*
+    /// as scrollback: SGR color sequences, printable text, and newlines. The
+    /// dump is a screen snapshot — it carries absolute cursor moves, erases, DEC
+    /// private modes (e.g. bracketed paste), and OSC that, replayed via `print`,
+    /// reposition and overwrite rather than append, so nothing readable lands
+    /// (the cause of "scrollback not restored"). Keeping only SGR + text turns it
+    /// into clean colored lines; CR / CRLF are normalized to LF.
+    nonisolated static func sanitizeForReplay(_ vt: String) -> String {
+        let s = Array(vt.unicodeScalars)
+        let n = s.count
+        var out = String.UnicodeScalarView()
+        var i = 0
+        func isFinal(_ u: UnicodeScalar) -> Bool {
+            u.value >= 0x40 && u.value <= 0x7E
+        }
+        while i < n {
+            let c = s[i]
+            if c.value == 0x1B { // ESC
+                if i + 1 < n, s[i + 1] == "[" { // CSI — keep only SGR (`…m`)
+                    var j = i + 2
+                    while j < n, !isFinal(s[j]) {
+                        j += 1
+                    }
+                    if j < n {
+                        if s[j] == "m" { for k in i ... j {
+                            out.append(s[k])
+                        } }
+                        i = j + 1
+                    } else {
+                        i = n
+                    }
+                    continue
+                } else if i + 1 < n, s[i + 1] == "]" { // OSC — drop to BEL / ST
+                    var j = i + 2
+                    while j < n {
+                        if s[j].value == 0x07 { j += 1
+                            break
+                        }
+                        if s[j].value == 0x1B, j + 1 < n, s[j + 1] == "\\" { j += 2
+                            break
+                        }
+                        j += 1
+                    }
+                    i = j
+                    continue
+                } else { // other escape — drop ESC + the next byte
+                    i += 2
+                    continue
+                }
+            } else if c == "\r" {
+                if i + 1 < n, s[i + 1] == "\n" { i += 1
+                    continue
+                } // CRLF → LF
+                out.append("\n") // lone CR → LF
+                i += 1
+                continue
+            } else {
+                out.append(c)
+                i += 1
+            }
+        }
+        return String(out)
     }
 
     /// Trim replayed scrollback to roughly the last `maxBytes`, so it stays well

@@ -21,6 +21,27 @@ struct SessionResurrectTests {
     }
 
     @Test
+    func sanitize_keeps_color_and_text_but_strips_positioning() {
+        let esc = "\u{1B}"
+        let vt = "\(esc)[2J\(esc)[H\(esc)[31mred\(esc)[0m\(esc)[2;8Htext\r\nmore\r"
+        let clean = SessionResurrect.sanitizeForReplay(vt)
+        #expect(clean.contains("\(esc)[31m")) // SGR color kept
+        #expect(clean.contains("\(esc)[0m"))
+        #expect(clean.contains("red") && clean.contains("text") && clean.contains("more"))
+        #expect(!clean.contains("\(esc)[2J")) // clear-screen stripped
+        #expect(!clean.contains("\(esc)[H")) // cursor-home stripped
+        #expect(!clean.contains("\(esc)[2;8H")) // absolute position stripped
+        #expect(!clean.contains("\r")) // CR/CRLF normalized to LF
+    }
+
+    @Test
+    func sanitize_strips_osc_and_private_modes() {
+        let esc = "\u{1B}"
+        let vt = "\(esc)[?2004h\(esc)]0;window title\u{07}hello\(esc)[?12h"
+        #expect(SessionResurrect.sanitizeForReplay(vt) == "hello")
+    }
+
+    @Test
     func boot_time_is_readable_and_positive() {
         // Sanity: kern.boottime resolves to a plausible epoch second.
         let boot = SystemBootTime.current()
