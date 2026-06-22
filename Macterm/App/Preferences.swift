@@ -90,6 +90,12 @@ final class Preferences {
         didSet { defaults.set(showNewProjectButton, forKey: Keys.showNewProjectButton) }
     }
 
+    /// Sidebar (project/tab list) visibility, persisted across launches. Starts
+    /// closed by default; `AppState.sidebarVisible` mirrors this.
+    var sidebarVisible: Bool {
+        didSet { defaults.set(sidebarVisible, forKey: Keys.sidebarVisible) }
+    }
+
     // MARK: - Toolbar
 
     var tabSwitcherVisibility: TabSwitcherVisibility {
@@ -265,6 +271,7 @@ final class Preferences {
         tabIconSymbol = defaults.string(forKey: Keys.tabIconSymbol) ?? "terminal"
         showTabStatusIndicator = defaults.object(forKey: Keys.showTabStatusIndicator) as? Bool ?? false
         showNewProjectButton = defaults.object(forKey: Keys.showNewProjectButton) as? Bool ?? true
+        sidebarVisible = defaults.object(forKey: Keys.sidebarVisible) as? Bool ?? false
         tabSwitcherVisibility = (defaults.string(forKey: Keys.tabSwitcherVisibility))
             .flatMap(TabSwitcherVisibility.init(rawValue:)) ?? .whenMultiple
         Self.runOneTimeMigrations(defaults: defaults)
@@ -309,6 +316,7 @@ final class Preferences {
         static let tabIconSymbol = "macterm.sidebar.tabIcon"
         static let showTabStatusIndicator = "macterm.sidebar.showTabStatusIndicator"
         static let showNewProjectButton = "macterm.sidebar.showNewProjectButton"
+        static let sidebarVisible = "macterm.sidebar.visible"
         static let tabSwitcherVisibility = "macterm.toolbar.tabSwitcherVisibility"
         static let migrationV2GhosttyConfigOwned = "macterm.migration.v2_ghostty_config_owned"
     }
