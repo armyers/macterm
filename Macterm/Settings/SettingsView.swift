@@ -19,6 +19,12 @@ struct SettingsView: View {
                 .tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
         }
         .frame(width: 520, height: 540)
+        // ESC closes the Settings window. `close()` (not `performClose`)
+        // dismisses it immediately without routing through any window delegate;
+        // the focused window here is always the Settings window.
+        .onExitCommand {
+            NSApp.keyWindow?.close()
+        }
     }
 }
 
