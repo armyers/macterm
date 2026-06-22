@@ -67,6 +67,7 @@ enum SessionResurrect {
             logger.error("resume script write failed for \(sessionID, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
+        logger.info("resume attach for \(sessionID, privacy: .public): \(clean.utf8.count, privacy: .public) bytes scrollback")
         return "\(base) /bin/sh \(scriptPath)"
     }
 

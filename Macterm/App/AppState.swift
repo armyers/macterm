@@ -210,8 +210,14 @@ final class AppState {
         // an app quit and sessions reattach live. Must be set before ensureNSView
         // runs, since that's where dead sessions are seeded.
         let storedBoot = UserDefaults.standard.object(forKey: bootTimeKey) as? Int
-        SessionResurrect.didReboot = storedBoot != nil && bootTimeAtLaunch != nil && storedBoot != bootTimeAtLaunch
-        logger.info("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public)")
+        let rebooted = storedBoot != nil && bootTimeAtLaunch != nil && storedBoot != bootTimeAtLaunch
+        // Testing override: `defaults write <bundle> macterm.resurrect.forceReboot -bool true`
+        // forces the dead-session (seed) path without an actual reboot or the
+        // fragile boot-time fake. We never write this key, so it persists across
+        // launches until the tester clears it.
+        let forced = UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot")
+        SessionResurrect.didReboot = rebooted || forced
+        logger.info("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public) forced=\(forced, privacy: .public)")
         let snapshots = workspaceStore.load()
         let valid = Set(projects.map(\.id))
         // A committed layout file is the source of truth: skip restoring the
