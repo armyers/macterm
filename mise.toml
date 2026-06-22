@@ -67,6 +67,12 @@ run = """
   fi
 """
 
+[tasks.ship]
+description = "Full pipeline: format, lint, test, build, install (signed)"
+# Runs each step in order with streamed output. Signs with MACTERM_SIGN_IDENTITY
+# (set in .mise.local.toml) — mise injects it into the script's environment.
+run = "./scripts/ship.sh"
+
 [tasks.setup]
 description = "Download GhosttyKit framework and resources"
 usage = 'flag "-v --verbose" help="Stream raw output instead of the spinner"'
