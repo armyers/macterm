@@ -286,29 +286,14 @@ final class AppState {
     /// Driven by `resurrectTimer` (~15s); results applied on main.
     func captureResurrectState() {
         guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
-        // In-process scrollback read (main thread). Skip full-screen TUIs so we
-        // capture shell history, not e.g. an editor's UI.
-        var scrollbacks: [String: String] = [:]
-        for ws in workspaces.values {
-            for tab in ws.tabs {
-                for pane in tab.splitRoot.allPanes() where !pane.ephemeral {
-                    guard !ProcessInspector.terminalInputIsRaw(forPane: pane),
-                          let text = pane.nsView?.readScrollback(), !text.isEmpty
-                    else { continue }
-                    scrollbacks[pane.sessionID] = text
-                }
-            }
-        }
         let referenced = referencedSessionIDs()
         guard !referenced.isEmpty else { return }
         Task.detached(priority: .utility) {
-            // Persist freshly-read scrollback (off-main IO). Skipped panes keep
-            // their previous file — prune retains every referenced id.
-            for (id, text) in scrollbacks {
-                ResurrectStore.write(sessionID: id, scrollback: text)
-            }
-            ResurrectStore.prune(keeping: referenced)
-            // Restartable-command lookup via zmx introspection (subprocess).
+            // 1. zmx introspection (subprocess): per session, the restartable
+            //    foreground command. A session running an allowlisted full-screen
+            //    program (editor/pager/monitor) is "busy" — its surface shows the
+            //    program's UI, not shell history, so we skip its scrollback and
+            //    keep the last good capture.
             let zmx = ZmxService.standard
             let pidByID = Dictionary(
                 uniqueKeysWithValues: zmx.list().filter(\.isHealthy).compactMap { s in s.pid.map { (s.name, $0) } }
@@ -321,11 +306,42 @@ final class AppState {
                     commands[id] = cmd
                 }
             }
+            let busy = Set(commands.keys)
+            // 2. Read scrollback in-process from each idle pane's ghostty surface
+            //    (main thread). NOTE: a zmx client's pty is always raw, so we do
+            //    NOT use raw-mode to detect "busy" — the command lookup does.
+            let scrollbacks = await self.readScrollbacks(skipping: busy)
+            for (id, text) in scrollbacks {
+                ResurrectStore.write(sessionID: id, scrollback: text)
+            }
+            ResurrectStore.prune(keeping: referenced)
+            logger
+                .info("captureResurrectState: captured \(scrollbacks.count, privacy: .public) panes, \(busy.count, privacy: .public) busy")
             await MainActor.run {
                 self.capturedResurrectCommands = commands
                 self.saveWorkspaces()
             }
         }
+    }
+
+    /// Read each non-ephemeral pane's full scrollback in-process (ghostty
+    /// `read_text`), skipping sessions in `skipping` (running a full-screen
+    /// program, whose surface shows the program UI rather than history).
+    @MainActor
+    private func readScrollbacks(skipping: Set<String>) -> [String: String] {
+        var out: [String: String] = [:]
+        for ws in workspaces.values {
+            for tab in ws.tabs {
+                for pane in tab.splitRoot.allPanes()
+                    where !pane.ephemeral && !skipping.contains(pane.sessionID)
+                {
+                    if let text = pane.nsView?.readScrollback(), !text.isEmpty {
+                        out[pane.sessionID] = text
+                    }
+                }
+            }
+        }
+        return out
     }
 
     /// On launch, reap orphaned zmx sessions Seshterm created — UUID-named
