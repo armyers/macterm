@@ -11,7 +11,13 @@ final class AppState {
     }
 
     var workspaces: [UUID: Workspace] = [:]
-    var sidebarVisible = true
+    /// Initialized from the persisted preference (default closed) and written
+    /// back on toggle, so the sidebar state survives relaunch. `didSet` doesn't
+    /// fire on this initializer, so launching never re-persists the default.
+    var sidebarVisible = Preferences.shared.sidebarVisible {
+        didSet { Preferences.shared.sidebarVisible = sidebarVisible }
+    }
+
     var pendingClosePane: PendingClosePane?
     /// A computed layout-apply plan awaiting user confirmation because applying
     /// it would terminate one or more live panes/tabs. nil when no apply is
