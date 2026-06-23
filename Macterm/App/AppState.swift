@@ -14,7 +14,7 @@ final class AppState {
     /// Initialized from the persisted preference (default closed) and written
     /// back on toggle, so the sidebar state survives relaunch. `didSet` doesn't
     /// fire on this initializer, so launching never re-persists the default.
-    var sidebarVisible = Preferences.shared.sidebarVisible {
+    var sidebarVisible = Preferences.shared.initialSidebarVisible {
         didSet { Preferences.shared.sidebarVisible = sidebarVisible }
     }
 

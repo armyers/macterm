@@ -6,11 +6,12 @@ struct MainWindow: View {
     private var appState
     @Environment(ProjectStore.self)
     private var projectStore
-    /// Initialize from the persisted sidebar pref (default closed) so launch
-    /// matches `appState.sidebarVisible`; the onChange below keeps them synced.
+    /// Initialize from the sidebar's launch visibility (per the startup-behavior
+    /// pref) so the first render matches `appState.sidebarVisible`; the onChange
+    /// below keeps them synced.
     @State
     private var columnVisibility: NavigationSplitViewVisibility =
-        Preferences.shared.sidebarVisible ? .automatic : .detailOnly
+        Preferences.shared.initialSidebarVisible ? .automatic : .detailOnly
     @State
     private var detailWidth: CGFloat = .infinity
 

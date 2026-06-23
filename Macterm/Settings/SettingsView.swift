@@ -271,6 +271,8 @@ private struct AppearanceSettings: View {
     private var showNewProjectButton = true
     @AppStorage(Preferences.Keys.tabSwitcherVisibility)
     private var tabSwitcherVisibility = TabSwitcherVisibility.whenMultiple.rawValue
+    @AppStorage(Preferences.Keys.sidebarStartupBehavior)
+    private var sidebarStartupBehavior = SidebarStartupBehavior.visible.rawValue
     @AppStorage(Preferences.Keys.paneHighlightBorderEnabled)
     private var paneHighlightBorderEnabled = true
     @AppStorage(Preferences.Keys.inactivePaneDimming)
@@ -351,6 +353,18 @@ private struct AppearanceSettings: View {
             }
 
             Section("Sidebar") {
+                Picker("Sidebar visibility", selection: $sidebarStartupBehavior) {
+                    ForEach(SidebarStartupBehavior.allCases) { behavior in
+                        Text(behavior.displayName).tag(behavior.rawValue)
+                    }
+                }
+                .onChange(of: sidebarStartupBehavior) { _, v in
+                    Preferences.shared.sidebarStartupBehavior = SidebarStartupBehavior(rawValue: v) ?? .visible
+                }
+                Text("How the project/context bar opens at launch. “Resume last state” reopens it as you left it.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
                 Picker("Project icon", selection: $projectIconSymbol) {
                     ForEach(Preferences.projectIconChoices, id: \.self) { name in
                         iconPickerLabel(name).tag(name)
