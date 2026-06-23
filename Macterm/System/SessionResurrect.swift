@@ -65,8 +65,10 @@ enum SessionResurrect {
             }
             guard appeared else {
                 logger.error("resurrect seed timed out waiting for session \(sessionID, privacy: .public)")
+                debugLog("SEED \(sessionID.prefix(8)): TIMED OUT waiting for session")
                 return
             }
+            debugLog("SEED \(sessionID.prefix(8)): appeared, scrollback=\(scrollback?.utf8.count ?? 0)B command=\(command ?? "nil")")
             // Wait for the login shell to settle at its prompt — scrollback goes
             // non-empty and stops growing — so the client is rendering and our
             // injected bytes aren't dropped or wiped by the prompt redraw.
@@ -80,12 +82,32 @@ enum SessionResurrect {
             if let scrollback {
                 zmx.print(sessionID: sessionID, text: scrollback)
                 logger.notice("resurrect print \(sessionID, privacy: .public): \(scrollback.utf8.count, privacy: .public) bytes")
+                debugLog("PRINT \(sessionID.prefix(8)): \(scrollback.utf8.count) bytes -> session")
+            } else {
+                debugLog("PRINT \(sessionID.prefix(8)): no scrollback to replay")
             }
             if let command, !command.isEmpty {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 zmx.send(sessionID: sessionID, text: command + "\r")
+                debugLog("SEND \(sessionID.prefix(8)): \(command)")
             }
             logger.notice("resurrected session \(sessionID, privacy: .public)")
+        }
+    }
+
+    /// Append a line to the temp debug log, only while the `forceReboot` test
+    /// key is set. os_log isn't persisted for the signed build, so this is the
+    /// reliable channel for observing the seed during testing.
+    nonisolated static func debugLog(_ message: String) {
+        guard UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot") else { return }
+        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "seshterm-restore-debug.log")
+        let line = Data((message + "\n").utf8)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(line)
+            try? handle.close()
+        } else {
+            try? line.write(to: url, options: .atomic)
         }
     }
 
