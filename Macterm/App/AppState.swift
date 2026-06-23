@@ -259,6 +259,11 @@ final class AppState {
     }
 
     func saveWorkspaces() {
+        let summary = workspaces.values.map { ws in
+            let panes = ws.tabs.reduce(0) { $0 + $1.splitRoot.allPanes().count }
+            return "\(ws.projectID.uuidString.prefix(8)):tabs=\(ws.tabs.count),panes=\(panes)"
+        }.joined(separator: " ")
+        resurrectDebug("SAVE: [\(summary)] terminating=\(AppTerminationState.isTerminating)")
         workspaceStore.save(WorkspaceSerializer.snapshot(workspaces, resurrectCommands: capturedResurrectCommands))
         // Record the boot time these sessions belong to, so the next launch can
         // tell whether the machine rebooted (sessions dead) or not (reattach).
@@ -727,6 +732,13 @@ final class AppState {
     }
 
     func closePane(_ paneID: UUID, projectID: UUID) {
+        // During app termination the zmx client processes exit, firing their
+        // process-exit callbacks → here. Closing panes now would tear the
+        // workspace down (last pane → closeTab → empty tabs) and the quit-time
+        // save would then persist an empty workspace, so the next launch finds
+        // nothing to restore and builds a fresh default (losing the session IDs,
+        // breaking reattach/resurrect). Leave the tree intact while quitting.
+        guard !AppTerminationState.isTerminating else { return }
         guard let ws = workspaces[projectID] else { return }
         // Find the tab that actually contains this pane (not just the active tab)
         guard let tab = ws.tabs.first(where: { $0.splitRoot.findPane(id: paneID) != nil }) else {
