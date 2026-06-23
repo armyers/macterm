@@ -65,6 +65,23 @@ All keybinds are configurable via `HotkeyAction` + `HotkeyRegistry`. `KeyRouter`
 
 A tab's auto-title is, by default, the pane's live **foreground process name** (`hx`, `btop`) — falling back to the login shell name (from `getpwuid`, not `$SHELL`) when idle, overridden by a user-set `customTitle`. `ProcessInspector.runningProcessName` reads the foreground pid's kernel `comm`. `AppState` polls panes ~250ms (`refreshAllForegroundProcesses`, republishing only on change). OSC 0/2 titles are **provenance-gated** (`Pane.receiveReportedTitle`): the raw sequence can't distinguish a program naming its session (claude, ssh) from a shell titling its prompt (nushell, Starship emit the cwd), so the title string is adopted as `Pane.programTitle` only while the foreground process is a real program — not a shell — and is pinned to that pid; the poll expires it when the pid loses the foreground (`applyForegroundRefresh`), and prompt-time titles are discarded. `displayTitle` prefers `programTitle` over the process name; the quit dialog keeps the process-derived `processTitle`. Every OSC title arrival also triggers a process refresh (command boundary). Titles aren't persisted — always derived live.
 
+### Reboot Resurrect
+
+zmx-backed panes survive a **reboot** (tmux-resurrect style), not just an app quit. `AppState` captures each live session's color scrollback (`zmx history --vt`, byte-capped ~2.5MB by `ZmxService.tailKeepingBytes`) and its restartable foreground command every ~15s. Reboot is detected by comparing `kern.boottime` (saved per workspace save) to launch (`SessionResurrect.didReboot`). On an app quit the daemon survives, so `zmx attach` reattaches live; on a reboot the daemon is gone, so `SessionResurrect.seedIfRebooted` replays the saved scrollback (capped 2MB, sanitized, chunked under 4KB and paced via `zmx print`) into the fresh session, then re-runs the command. Replay is chunked/paced because stock zmx drops a single `print` in the ~4-8KB band; the chunking keeps it correct on stock zmx.
+
+**Testing without an actual reboot:** a UserDefaults override forces the reboot/seed path so you can test with `pkill zmx` + relaunch. The app only reads it (never writes), so it's a no-op in production and safe to toggle while the app runs (takes effect next launch). When set, a temp debug log at `${TMPDIR}seshterm-restore-debug.log` records the seed trace (`READ`/`APPEARED`/`PRINT`/`SEND`).
+
+```bash
+# ON: force the reboot/seed path (pkill zmx + relaunch then resurrects)
+defaults write  com.thdxg.seshterm macterm.resurrect.forceReboot -bool true
+# OFF: back to real kern.boottime detection (only a genuine reboot resurrects)
+defaults delete com.thdxg.seshterm macterm.resurrect.forceReboot
+# check
+defaults read   com.thdxg.seshterm macterm.resurrect.forceReboot
+```
+
+Use `com.thdxg.seshterm.debug` as the domain for debug builds.
+
 ## Layout
 
 - `Macterm/App/` — `AppState`, `Preferences` (observable UserDefaults wrapper), `Hotkeys`/`KeyRouter`/`Responders`, `AppCommand`+`AppCommandActions`+`AppCommandMenu` (single source of truth for user-invokable actions — palette, menu bar, and Settings all render from `AppCommand.allCases`), `FocusRestoration` (retries `makeFirstResponder` across run-loop ticks), `Updater` (Sparkle), `AppInfo` (`appBundleID`, `appDisplayName`).
