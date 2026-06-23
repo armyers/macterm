@@ -70,7 +70,7 @@ enum SessionResurrect {
             logger.error("resume script write failed for \(sessionID, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
-        logger.info("resume attach for \(sessionID, privacy: .public): \(clean.utf8.count, privacy: .public) bytes scrollback")
+        logger.notice("resume attach for \(sessionID, privacy: .public): \(clean.utf8.count, privacy: .public) bytes scrollback")
         return "\(base) /bin/sh \(scriptPath)"
     }
 
@@ -111,7 +111,7 @@ enum SessionResurrect {
             }
             try? await Task.sleep(nanoseconds: 300_000_000)
             zmx.send(sessionID: sessionID, text: command + "\r")
-            logger.info("resurrected session \(sessionID, privacy: .public)")
+            logger.notice("resurrected session \(sessionID, privacy: .public)")
         }
     }
 

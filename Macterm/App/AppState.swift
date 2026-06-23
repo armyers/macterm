@@ -217,7 +217,7 @@ final class AppState {
         // launches until the tester clears it.
         let forced = UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot")
         SessionResurrect.didReboot = rebooted || forced
-        logger.info("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public) forced=\(forced, privacy: .public)")
+        logger.notice("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public) forced=\(forced, privacy: .public)")
         let snapshots = workspaceStore.load()
         let valid = Set(projects.map(\.id))
         // A committed layout file is the source of truth: skip restoring the
@@ -229,6 +229,17 @@ final class AppState {
             where !LayoutFile.exists(atProjectRoot: pathByID[ws.projectID] ?? "")
         {
             workspaces[ws.projectID] = ws
+        }
+        // Diagnostic (persisted at .notice): the restored panes' sessionIDs and
+        // whether each has a saved scrollback file. If the ids here don't match
+        // the scrollback files, restore isn't reusing the persisted sessionID.
+        for ws in workspaces.values {
+            for tab in ws.tabs {
+                for pane in tab.splitRoot.allPanes() {
+                    let hasFile = ResurrectStore.scrollback(sessionID: pane.sessionID) != nil
+                    logger.notice("restored pane session=\(pane.sessionID, privacy: .public) scrollbackFile=\(hasFile, privacy: .public)")
+                }
+            }
         }
         if let id = Preferences.shared.activeProjectID,
            let project = projects.first(where: { $0.id == id })
@@ -316,7 +327,7 @@ final class AppState {
             }
             ResurrectStore.prune(keeping: referenced)
             let busyCmds = commands.values.joined(separator: " | ")
-            logger.info("captureResurrectState: captured \(scrollbacks.count, privacy: .public), busy=[\(busyCmds, privacy: .public)]")
+            logger.notice("captureResurrectState: captured \(scrollbacks.count, privacy: .public), busy=[\(busyCmds, privacy: .public)]")
             await MainActor.run {
                 self.capturedResurrectCommands = commands
                 self.saveWorkspaces()
