@@ -43,6 +43,13 @@ final class AppState {
     private var projectRecency = RecencyStack<UUID>(limit: 50)
     private let recencyKey = "macterm.projectRecency"
 
+    /// `kern.boottime` at launch, persisted on every save. Comparing the stored
+    /// value to this launch's tells `restoreSelection` whether the machine
+    /// rebooted since the last save (so zmx sessions are dead and need seeding).
+    private let bootTimeKey = "macterm.resurrect.lastBootTime"
+    @ObservationIgnored
+    private let bootTimeAtLaunch = SystemBootTime.current()
+
     /// Maps a scrollback-editor pane to the pane its scrollback came from, so
     /// focus returns there when the editor split closes (`editScrollback`).
     @ObservationIgnored
@@ -104,6 +111,18 @@ final class AppState {
     @ObservationIgnored
     private var processNameTimer: Timer?
 
+    /// Periodic capture of zmx-backed panes' color scrollback (for post-reboot
+    /// resurrect), plus a workspace save. Fires ~every 15s — far slower than the
+    /// process poll, since it shells out to `zmx history` per pane.
+    @ObservationIgnored
+    private var resurrectTimer: Timer?
+
+    /// sessionID → restartable foreground command, refreshed off-main by
+    /// `captureResurrectState`. `saveWorkspaces` reads this cache so a snapshot
+    /// never has to spawn a zmx subprocess on the (main) save path.
+    @ObservationIgnored
+    private var capturedResurrectCommands: [String: String] = [:]
+
     init(workspaceStore: WorkspaceStore = WorkspaceStore()) {
         self.workspaceStore = workspaceStore
         autoTileObserver = NotificationCenter.default.addObserver(
@@ -122,6 +141,12 @@ final class AppState {
         }
         RunLoop.main.add(timer, forMode: .common)
         processNameTimer = timer
+
+        let resurrect = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.captureResurrectState() }
+        }
+        RunLoop.main.add(resurrect, forMode: .common)
+        resurrectTimer = resurrect
     }
 
     /// Re-read the foreground process name of every live pane across all
@@ -179,6 +204,20 @@ final class AppState {
     func restoreSelection(projects: [Project]) {
         logger.info("restoreSelection: \(projects.count, privacy: .public) projects")
         hasRestoredSelection = true
+        // Decide live-vs-dead for restored zmx sessions BEFORE any surface is
+        // created (warmFocusedProject attaches them). A reboot kills the daemon,
+        // so the boot time changes; matching boot times mean the daemon survived
+        // an app quit and sessions reattach live. Must be set before ensureNSView
+        // runs, since that's where dead sessions are seeded.
+        let storedBoot = UserDefaults.standard.object(forKey: bootTimeKey) as? Int
+        let rebooted = storedBoot != nil && bootTimeAtLaunch != nil && storedBoot != bootTimeAtLaunch
+        // Test affordance: `defaults write <bundle> macterm.resurrect.forceReboot
+        // -bool true` forces the dead-session (seed) path so resurrect can be
+        // exercised by quitting + `pkill zmx` + relaunching, without a real
+        // reboot. The app never writes this key, so it's a no-op in production.
+        let forced = UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot")
+        SessionResurrect.didReboot = rebooted || forced
+        logger.info("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public)")
         let snapshots = workspaceStore.load()
         let valid = Set(projects.map(\.id))
         // A committed layout file is the source of truth: skip restoring the
@@ -186,11 +225,21 @@ final class AppState {
         // nil so it rebuilds from `.macterm/layout.yaml` on open (below / on
         // first select). Projects with no layout file restore their snapshot.
         let pathByID = Dictionary(projects.map { ($0.id, $0.path) }, uniquingKeysWith: { a, _ in a })
+        func snapIDs(_ n: SplitNodeSnapshot) -> [String] {
+            switch n {
+            case let .pane(p): [p.sessionID ?? "nil"]
+            case let .split(b): snapIDs(b.first) + snapIDs(b.second)
+            }
+        }
+        let loadedIDs = snapshots.flatMap { $0.tabs.flatMap { snapIDs($0.splitRoot) } }
+        resurrectDebug("LOAD: projects=\(projects.count) snapshots=\(snapshots.count) loadedSessionIDs=\(loadedIDs)")
         for ws in WorkspaceSerializer.restore(from: snapshots, validIDs: valid)
             where !LayoutFile.exists(atProjectRoot: pathByID[ws.projectID] ?? "")
         {
             workspaces[ws.projectID] = ws
         }
+        let restoredIDs = workspaces.values.flatMap { $0.tabs.flatMap { $0.splitRoot.allPanes().map(\.sessionID) } }
+        resurrectDebug("RESTORED: workspaces=\(workspaces.count) restoredSessionIDs=\(restoredIDs)")
         if let id = Preferences.shared.activeProjectID,
            let project = projects.first(where: { $0.id == id })
         {
@@ -204,10 +253,105 @@ final class AppState {
             acknowledgeActiveTab(projectID: id)
             warmFocusedProject()
         }
+        // Reap leftover UUID sessions now that every restored pane's sessionID
+        // is known (referenced sessions are preserved for reattach/resurrect).
+        garbageCollectOrphanedSessions()
     }
 
     func saveWorkspaces() {
-        workspaceStore.save(WorkspaceSerializer.snapshot(workspaces))
+        let summary = workspaces.values.map { ws in
+            let panes = ws.tabs.reduce(0) { $0 + $1.splitRoot.allPanes().count }
+            return "\(ws.projectID.uuidString.prefix(8)):tabs=\(ws.tabs.count),panes=\(panes)"
+        }.joined(separator: " ")
+        resurrectDebug("SAVE: [\(summary)] terminating=\(AppTerminationState.isTerminating)")
+        workspaceStore.save(WorkspaceSerializer.snapshot(workspaces, resurrectCommands: capturedResurrectCommands))
+        // Record the boot time these sessions belong to, so the next launch can
+        // tell whether the machine rebooted (sessions dead) or not (reattach).
+        UserDefaults.standard.set(bootTimeAtLaunch, forKey: bootTimeKey)
+    }
+
+    // MARK: - Reboot resurrect (capture + GC)
+
+    /// Every sessionID referenced by a live pane across all workspaces (skipping
+    /// ephemeral panes, which never persist). Used to decide which scrollback
+    /// files to keep and which orphaned zmx sessions to reap.
+    private func referencedSessionIDs() -> Set<String> {
+        var ids: Set<String> = []
+        for ws in workspaces.values {
+            for tab in ws.tabs {
+                for pane in tab.splitRoot.allPanes() where !pane.ephemeral {
+                    ids.insert(pane.sessionID)
+                }
+            }
+        }
+        return ids
+    }
+
+    /// Snapshot each live zmx-backed pane's scrollback to disk and refresh the
+    /// restartable-command cache `snapshot` reads, so a post-reboot restore can
+    /// replay both. No-op when persistence is off or zmx is absent.
+    ///
+    /// Scrollback comes from `zmx history --vt` — the **daemon's** authoritative
+    /// full scrollback (its internal terminal, `screen = .all`, with per-cell
+    /// SGR color), not the client surface's `read_text` (which after a reattach
+    /// only holds a one-screen snapshot — the cause of the ~58-byte captures).
+    /// A session running an allowlisted full-screen program (editor/pager) is
+    /// "busy": its terminal shows the program UI, not shell history, so we skip
+    /// it and keep the last good capture. All off-main (zmx is subprocess).
+    /// Driven by `resurrectTimer` (~15s).
+    func captureResurrectState() {
+        guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
+        let referenced = referencedSessionIDs()
+        guard !referenced.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            let zmx = ZmxService.standard
+            let pidByID = Dictionary(
+                uniqueKeysWithValues: zmx.list().filter(\.isHealthy).compactMap { s in s.pid.map { (s.name, $0) } }
+            )
+            var commands: [String: String] = [:]
+            for id in referenced {
+                if let pid = pidByID[id],
+                   let cmd = RestartableCommand.restartable(ProcessInspector.foregroundCommand(ofSessionPID: pid))
+                {
+                    commands[id] = cmd
+                }
+            }
+            let busy = Set(commands.keys)
+            var captured = 0
+            for id in referenced where !busy.contains(id) && pidByID[id] != nil {
+                if let vt = zmx.history(sessionID: id), !vt.isEmpty {
+                    ResurrectStore.write(sessionID: id, scrollback: vt)
+                    captured += 1
+                }
+            }
+            ResurrectStore.prune(keeping: referenced)
+            logger.info("captureResurrect: \(captured, privacy: .public) scrollback, \(commands.count, privacy: .public) restartable")
+            await MainActor.run {
+                self.capturedResurrectCommands = commands
+                self.saveWorkspaces()
+            }
+        }
+    }
+
+    /// On launch, reap orphaned zmx sessions Seshterm created — UUID-named
+    /// sessions the daemon kept alive across an app quit that no restored pane
+    /// references. Never touches the user's own named sessions (non-UUID names)
+    /// or sessions still in use. The zmx subprocess work runs off the main
+    /// thread so it never blocks launch. No-op when persistence is off / no zmx.
+    private func garbageCollectOrphanedSessions() {
+        guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
+        let referenced = referencedSessionIDs()
+        Task.detached(priority: .utility) {
+            let zmx = ZmxService.standard
+            for session in zmx.list() {
+                // Only Seshterm-generated sessions (UUID names) are eligible —
+                // leave the user's `zmx attach mysession` alone.
+                guard UUID(uuidString: session.name) != nil, !referenced.contains(session.name) else { continue }
+                logger.info("GC orphaned zmx session: \(session.name, privacy: .public)")
+                zmx.kill(sessionID: session.name, force: true)
+            }
+            ResurrectStore.prune(keeping: referenced)
+        }
     }
 
     // MARK: - Project
@@ -562,6 +706,13 @@ final class AppState {
     }
 
     func closePane(_ paneID: UUID, projectID: UUID) {
+        // During app termination the zmx client processes exit, firing their
+        // process-exit callbacks → here. Closing panes now would tear the
+        // workspace down (last pane → closeTab → empty tabs) and the quit-time
+        // save would then persist an empty workspace, so the next launch finds
+        // nothing to restore and builds a fresh default (losing the session IDs,
+        // breaking reattach/resurrect). Leave the tree intact while quitting.
+        guard !AppTerminationState.isTerminating else { return }
         guard let ws = workspaces[projectID] else { return }
         // Find the tab that actually contains this pane (not just the active tab)
         guard let tab = ws.tabs.first(where: { $0.splitRoot.findPane(id: paneID) != nil }) else {
@@ -871,7 +1022,24 @@ final class AppState {
 
     private func ensureWorkspace(projectID: UUID, path: String) {
         if workspaces[projectID] == nil {
+            resurrectDebug("ensureWorkspace: CREATED DEFAULT for \(projectID) (no restored workspace)")
             workspaces[projectID] = Workspace(projectID: projectID, projectPath: path)
+        }
+    }
+
+    /// Append a line to a temp debug log, only while the `forceReboot` test
+    /// override is set. os_log isn't persisted for this signed build, so this is
+    /// the reliable channel for diagnosing restore/resurrect during testing.
+    private func resurrectDebug(_ message: String) {
+        guard UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot") else { return }
+        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "seshterm-restore-debug.log")
+        let line = Data((message + "\n").utf8)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(line)
+            try? handle.close()
+        } else {
+            try? line.write(to: url, options: .atomic)
         }
     }
 }

@@ -70,6 +70,35 @@ enum ProcessInspector {
         return pid
     }
 
+    /// The full foreground command running inside a zmx session, derived from
+    /// the session's login-shell pid (reported by `zmx list`). zmx owns the
+    /// process tree in a daemon, so there's no surface pid to read — instead we
+    /// read the controlling tty's foreground process group directly from the
+    /// shell's kernel proc info (`e_tpgid`, the same field `ps` shows as TPGID)
+    /// and resolve that pid's argv. We do NOT open the tty and call
+    /// `tcgetpgrp`: that fails with ENOTTY for a tty owned by another session
+    /// (which a zmx session's pty always is), so it never worked here. Returns
+    /// nil when the session is idle at its shell prompt (the foreground is the
+    /// shell itself) or anything is unreadable. The string matches
+    /// `runningCommand`'s shape (resolved argv joined with spaces), so the
+    /// resurrect path and layout `save` agree.
+    static func foregroundCommand(ofSessionPID sessionPID: pid_t) -> String? {
+        guard let fpgid = foregroundPGID(ofSessionPID: sessionPID) else { return nil }
+        guard let args = argv(pid: fpgid), let first = args.first, !isShell(first) else { return nil }
+        return displayCommand(args)
+    }
+
+    /// The foreground process-group id of `pid`'s controlling terminal, read
+    /// from `proc_bsdinfo.e_tpgid`. nil when `pid` has no controlling tty
+    /// (`e_tpgid` ≤ 0) or its proc info can't be read.
+    private static func foregroundPGID(ofSessionPID pid: pid_t) -> pid_t? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        let tpgid = pid_t(bitPattern: info.e_tpgid)
+        return tpgid > 0 ? tpgid : nil
+    }
+
     /// Whether the pane's foreground process is a shell. Prefer the process's
     /// executable/argv path over its display name; the shell set itself comes
     /// from the host (`getusershell`, login shell, `$SHELL`) rather than a

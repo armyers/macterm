@@ -180,7 +180,14 @@ final class WorkspaceStore {
 
 @MainActor
 enum WorkspaceSerializer {
-    static func snapshot(_ workspaces: [UUID: Workspace]) -> [WorkspaceSnapshot] {
+    /// - Parameter resurrectCommands: sessionID → restartable foreground command,
+    ///   captured off-main by `AppState.captureResurrectState`. Read here so a
+    ///   snapshot never spawns a zmx subprocess on the (frequent, main-thread)
+    ///   save path. Empty for the native (no-zmx) and persistence-off paths.
+    static func snapshot(
+        _ workspaces: [UUID: Workspace],
+        resurrectCommands: [String: String] = [:]
+    ) -> [WorkspaceSnapshot] {
         workspaces.values.map { ws in
             WorkspaceSnapshot(
                 projectID: ws.projectID,
@@ -190,7 +197,7 @@ enum WorkspaceSerializer {
                         id: tab.id,
                         customTitle: tab.customTitle,
                         focusedPaneID: tab.focusedPaneID,
-                        splitRoot: snapshotNode(tab.splitRoot)
+                        splitRoot: snapshotNode(tab.splitRoot, resurrectCommands: resurrectCommands)
                     )
                 }
             )
@@ -210,7 +217,7 @@ enum WorkspaceSerializer {
         }
     }
 
-    static func snapshotNode(_ node: SplitNode) -> SplitNodeSnapshot {
+    static func snapshotNode(_ node: SplitNode, resurrectCommands: [String: String]) -> SplitNodeSnapshot {
         switch node {
         case let .pane(p):
             // Prefer the shell's live cwd over the pane's original project
@@ -219,31 +226,41 @@ enum WorkspaceSerializer {
             // surface hasn't reported a pwd yet.
             let path = p.nsView?.currentPwd ?? p.projectPath
             let needsAttention = p.executionState == .done
-            // Capture the live foreground command / non-default shell the same
-            // way a layout `save` does, so restore can re-launch it — but only
-            // for the native re-run path. When zmx backs the pane, the live
-            // foreground process is the zmx client (not the user's program), and
-            // reattach via `sessionID` restores the real state, so we capture
-            // neither. With persistence off, the default (plain-shell restore)
-            // is unchanged. `sessionID` is always persisted.
+            var command: String?
+            var shell: String?
+            // `isAvailable` is a cheap filesystem probe (no subprocess), safe to
+            // call on the main save path.
             let zmxBacked = Preferences.shared.sessionPersistenceEnabled && ZmxService.standard.isAvailable
             // Ephemeral panes (the scrollback editor) restore as a plain shell —
             // their command points at a temp file that's gone by next launch.
-            let captureCommand = Preferences.shared.sessionPersistenceEnabled && !zmxBacked && !p.ephemeral
+            if zmxBacked, !p.ephemeral {
+                // zmx-backed: read the restartable foreground command the
+                // resurrect timer captured off-main (nil for idle / non-
+                // allowlisted panes), so a dead-session reboot restore can
+                // relaunch it. No subprocess here.
+                command = resurrectCommands[p.sessionID]
+            } else if Preferences.shared.sessionPersistenceEnabled, !p.ephemeral {
+                // Native re-run path (persistence on, zmx unavailable): capture
+                // the live foreground command / non-default shell via the pane
+                // surface's pid (cheap proc_pidinfo), the same way a layout
+                // `save` does. With persistence off, both stay nil.
+                command = ProcessInspector.runningCommand(forPane: p)
+                shell = ProcessInspector.runningShell(forPane: p)
+            }
             return .pane(PaneSnapshot(
                 id: p.id,
                 projectPath: path,
                 needsAttention: needsAttention,
                 sessionID: p.sessionID,
-                command: captureCommand ? ProcessInspector.runningCommand(forPane: p) : nil,
-                shell: captureCommand ? ProcessInspector.runningShell(forPane: p) : nil
+                command: command,
+                shell: shell
             ))
         case let .split(b):
             return .split(SplitBranchSnapshot(
                 direction: b.direction,
                 ratio: Double(b.ratio),
-                first: snapshotNode(b.first),
-                second: snapshotNode(b.second)
+                first: snapshotNode(b.first, resurrectCommands: resurrectCommands),
+                second: snapshotNode(b.second, resurrectCommands: resurrectCommands)
             ))
         }
     }

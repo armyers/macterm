@@ -443,6 +443,12 @@ final class Pane: Identifiable {
             program: launch.program
         )
         _nsView = view
+        // After a reboot this attach spawned a *fresh* session (the daemon didn't
+        // survive). Seed it: replay the saved scrollback and re-run the command.
+        // No-op on app-quit relaunch (live reattach) or with persistence off.
+        if attach != nil {
+            SessionResurrect.seedIfRebooted(sessionID: sessionID, command: command)
+        }
         return view
     }
 
