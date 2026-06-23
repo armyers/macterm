@@ -89,10 +89,7 @@ enum SessionResurrect {
                     zmx.print(sessionID: sessionID, text: chunk)
                     try? await Task.sleep(nanoseconds: 25_000_000)
                 }
-                logger
-                    .notice(
-                        "resurrect print \(sessionID, privacy: .public): \(scrollback.utf8.count, privacy: .public) bytes / \(chunks.count, privacy: .public) chunks"
-                    )
+                logger.notice("resurrect print \(sessionID, privacy: .public): \(chunks.count, privacy: .public) chunks")
                 debugLog("PRINT \(sessionID.prefix(8)): \(scrollback.utf8.count) bytes in \(chunks.count) chunks")
             } else {
                 debugLog("PRINT \(sessionID.prefix(8)): no scrollback to replay")
