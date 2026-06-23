@@ -35,6 +35,23 @@ enum WindowGlassStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// How the project/context sidebar's visibility is decided at launch.
+enum SidebarStartupBehavior: String, CaseIterable, Identifiable {
+    case visible
+    case hidden
+    case resumeLast = "resume_last"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .visible: "Visible on startup"
+        case .hidden: "Hidden on startup"
+        case .resumeLast: "Resume last state"
+        }
+    }
+}
+
 /// Single observable source of truth for UserDefaults-backed preferences.
 ///
 /// Macterm only stores app-shaped state here (window opacity/blur, quick
@@ -127,10 +144,27 @@ final class Preferences {
         didSet { defaults.set(showNewProjectButton, forKey: Keys.showNewProjectButton) }
     }
 
-    /// Sidebar (project/tab list) visibility, persisted across launches. Starts
-    /// closed by default; `AppState.sidebarVisible` mirrors this.
+    /// Last live sidebar visibility, persisted on every toggle. `AppState
+    /// .sidebarVisible` mirrors this; it's the value restored when
+    /// `sidebarStartupBehavior` is `.resumeLast`.
     var sidebarVisible: Bool {
         didSet { defaults.set(sidebarVisible, forKey: Keys.sidebarVisible) }
+    }
+
+    /// How the sidebar's visibility is decided at launch. Defaults to `.visible`
+    /// so the project/context bar is discoverable out of the box.
+    var sidebarStartupBehavior: SidebarStartupBehavior {
+        didSet { defaults.set(sidebarStartupBehavior.rawValue, forKey: Keys.sidebarStartupBehavior) }
+    }
+
+    /// The sidebar visibility to apply at launch, per `sidebarStartupBehavior`:
+    /// always-visible, always-hidden, or the persisted last state.
+    var initialSidebarVisible: Bool {
+        switch sidebarStartupBehavior {
+        case .visible: true
+        case .hidden: false
+        case .resumeLast: sidebarVisible
+        }
     }
 
     // MARK: - Toolbar
@@ -314,6 +348,8 @@ final class Preferences {
         showTabStatusIndicator = defaults.object(forKey: Keys.showTabStatusIndicator) as? Bool ?? false
         showNewProjectButton = defaults.object(forKey: Keys.showNewProjectButton) as? Bool ?? true
         sidebarVisible = defaults.object(forKey: Keys.sidebarVisible) as? Bool ?? false
+        sidebarStartupBehavior = (defaults.string(forKey: Keys.sidebarStartupBehavior))
+            .flatMap(SidebarStartupBehavior.init) ?? .visible
         tabSwitcherVisibility = (defaults.string(forKey: Keys.tabSwitcherVisibility))
             .flatMap(TabSwitcherVisibility.init(rawValue:)) ?? .whenMultiple
         Self.runOneTimeMigrations(defaults: defaults)
@@ -364,6 +400,7 @@ final class Preferences {
         static let showTabStatusIndicator = "macterm.sidebar.showTabStatusIndicator"
         static let showNewProjectButton = "macterm.sidebar.showNewProjectButton"
         static let sidebarVisible = "macterm.sidebar.visible"
+        static let sidebarStartupBehavior = "macterm.sidebar.startupBehavior"
         static let tabSwitcherVisibility = "macterm.toolbar.tabSwitcherVisibility"
         static let migrationV2GhosttyConfigOwned = "macterm.migration.v2_ghostty_config_owned"
     }
