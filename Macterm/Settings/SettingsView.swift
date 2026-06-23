@@ -19,11 +19,17 @@ struct SettingsView: View {
                 .tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
         }
         .frame(width: 520, height: 540)
-        // ESC closes the Settings window. `close()` (not `performClose`)
-        // dismisses it immediately without routing through any window delegate;
-        // the focused window here is always the Settings window.
-        .onExitCommand {
-            NSApp.keyWindow?.close()
+        // ESC closes the Settings window from anywhere in it. `.onExitCommand`
+        // only fires when the TabView (or a focused descendant) is first
+        // responder — so it worked only while a control like the config-path
+        // field was focused. A zero-size `.cancelAction` button binds Escape at
+        // the window level regardless of focus. `close()` (not `performClose`)
+        // dismisses immediately without routing through a window delegate.
+        .background {
+            Button(action: { NSApp.keyWindow?.close() }, label: { EmptyView() })
+                .keyboardShortcut(.cancelAction)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
     }
 }
