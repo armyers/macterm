@@ -3,7 +3,15 @@ set -euo pipefail
 
 PROJECT_ROOT="$PWD"
 BUILD_DIR="$PROJECT_ROOT/build"
-VERSION="${VERSION:-0.0.0}"
+# Local builds (mise run build/ship/install) leave VERSION unset; derive a
+# meaningful, monotonic version from the commit count (e.g. 1.0.338) so each
+# install is distinguishable in About/Settings instead of a static 0.0.0.
+# Tagged releases set VERSION explicitly (.github/workflows/release.yml), so
+# they're unaffected.
+if [[ -z ${VERSION:-} ]]; then
+  COMMIT_COUNT=$(git -C "$PROJECT_ROOT" rev-list --count HEAD 2> /dev/null || echo 0)
+  VERSION="1.0.${COMMIT_COUNT}"
+fi
 # Sparkle compares CFBundleVersion against the appcast's sparkle:version when
 # deciding whether an update is newer. Use the marketing string for both so a
 # new tag always wins — a raw commit count can stay equal across two
