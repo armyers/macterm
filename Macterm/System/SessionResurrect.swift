@@ -80,9 +80,20 @@ enum SessionResurrect {
                 lastLen = len
             }
             if let scrollback {
-                zmx.print(sessionID: sessionID, text: scrollback)
-                logger.notice("resurrect print \(sessionID, privacy: .public): \(scrollback.utf8.count, privacy: .public) bytes")
-                debugLog("PRINT \(sessionID.prefix(8)): \(scrollback.utf8.count) bytes -> session")
+                // zmx renders a single print only up to ~4KB, and drops replays
+                // beyond ~50KB total when sent back-to-back. So chunk under 4KB
+                // (cappedForReplay already bounds the total to ~48KB) and pace
+                // the calls so the client keeps up.
+                let chunks = ZmxService.chunkOnLines(scrollback, maxBytes: 3000)
+                for chunk in chunks {
+                    zmx.print(sessionID: sessionID, text: chunk)
+                    try? await Task.sleep(nanoseconds: 25_000_000)
+                }
+                logger
+                    .notice(
+                        "resurrect print \(sessionID, privacy: .public): \(scrollback.utf8.count, privacy: .public) bytes / \(chunks.count, privacy: .public) chunks"
+                    )
+                debugLog("PRINT \(sessionID.prefix(8)): \(scrollback.utf8.count) bytes in \(chunks.count) chunks")
             } else {
                 debugLog("PRINT \(sessionID.prefix(8)): no scrollback to replay")
             }
@@ -194,7 +205,7 @@ enum SessionResurrect {
         return lines.joined(separator: "\n")
     }
 
-    nonisolated static func cappedForReplay(_ vt: String, maxBytes: Int = 64 * 1024) -> String {
+    nonisolated static func cappedForReplay(_ vt: String, maxBytes: Int = 48 * 1024) -> String {
         guard vt.utf8.count > maxBytes else { return vt }
         var kept: [Substring] = []
         var total = 0

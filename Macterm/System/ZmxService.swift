@@ -59,18 +59,13 @@ struct ZmxService {
     }
 
     /// Inject `text` into the session's terminal display (`zmx print`), preserving
-    /// ANSI/color. Used to replay saved scrollback into a fresh post-reboot
-    /// session. Raw bytes, not pty input — doesn't run anything.
-    ///
-    /// The daemon forwards each print as a single `.Output` IPC message, and a
-    /// client's socket read buffer is 4096 bytes (zmx `ipc.zig`); a message
-    /// larger than that isn't reassembled across reads and never renders in the
-    /// attached client. So split into sub-4KB chunks on line boundaries — each
-    /// renders, and together they replay the whole scrollback.
+    /// ANSI/color. Raw bytes, not pty input — doesn't run anything. One IPC
+    /// `.Output` message; a single message larger than ~4KB doesn't render in the
+    /// attached client (zmx's relay caps there), so callers replaying large
+    /// scrollback chunk via `chunkOnLines` and pace the calls (see
+    /// `SessionResurrect.seedIfRebooted`).
     func print(sessionID: String, text: String) {
-        for chunk in Self.chunkOnLines(text, maxBytes: 3000) {
-            _ = run(["print", sessionID, chunk])
-        }
+        _ = run(["print", sessionID, text])
     }
 
     /// Split `text` into pieces of at most ~`maxBytes`, breaking only at line
