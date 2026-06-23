@@ -271,6 +271,10 @@ private struct AppearanceSettings: View {
     private var showNewProjectButton = true
     @AppStorage(Preferences.Keys.tabSwitcherVisibility)
     private var tabSwitcherVisibility = TabSwitcherVisibility.whenMultiple.rawValue
+    @AppStorage(Preferences.Keys.paneHighlightBorderEnabled)
+    private var paneHighlightBorderEnabled = true
+    @AppStorage(Preferences.Keys.inactivePaneDimming)
+    private var inactivePaneDimming = 0.45
     @State
     private var backgroundOpacity: Double = Preferences.shared.windowOpacity
     @State
@@ -323,6 +327,27 @@ private struct AppearanceSettings: View {
                 Text(blurFootnote)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Panes") {
+                Toggle("Highlight the active pane", isOn: $paneHighlightBorderEnabled)
+                    .onChange(of: paneHighlightBorderEnabled) { _, v in
+                        Preferences.shared.paneHighlightBorderEnabled = v
+                    }
+                Text("Draws an accent border around the focused pane when a tab is split.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Text("Dim inactive panes")
+                    Slider(value: $inactivePaneDimming, in: 0 ... 0.9)
+                    Text("\(Int((inactivePaneDimming * 100).rounded()))%")
+                        .monospacedDigit()
+                        .frame(width: 42, alignment: .trailing)
+                }
+                .onChange(of: inactivePaneDimming) { _, v in
+                    Preferences.shared.inactivePaneDimming = v
+                }
             }
 
             Section("Sidebar") {

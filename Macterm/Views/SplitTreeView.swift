@@ -113,6 +113,11 @@ private struct SplitLeafView: View {
     let onZoomRequest: () -> Void
     let onMovePane: @MainActor (UUID, UUID, PaneDropZone) -> Void
 
+    @AppStorage(Preferences.Keys.paneHighlightBorderEnabled)
+    private var borderEnabled = true
+    @AppStorage(Preferences.Keys.inactivePaneDimming)
+    private var inactiveDimming = 0.45
+
     @State private var dropState: PaneDropState = .idle
     @State private var draggingPaneID: UUID?
 
@@ -134,16 +139,17 @@ private struct SplitLeafView: View {
                 onZoomRequest: onZoomRequest
             )
             .overlay {
-                // Dim inactive panes so the active one stands out.
-                if !isFocused, isSplit {
-                    Color.black.opacity(0.45)
+                // Dim inactive panes so the active one stands out. The amount is
+                // user-configurable (0 = no dim).
+                if !isFocused, isSplit, inactiveDimming > 0 {
+                    Color.black.opacity(inactiveDimming)
                         .allowsHitTesting(false)
                 }
             }
             .overlay {
                 // Accent border around the active pane (zellij-style), only when
-                // there's more than one pane to distinguish.
-                if isFocused, isSplit {
+                // there's more than one pane to distinguish, and when enabled.
+                if isFocused, isSplit, borderEnabled {
                     Rectangle()
                         .strokeBorder(MactermTheme.accent, lineWidth: 2)
                         .allowsHitTesting(false)
