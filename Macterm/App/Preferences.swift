@@ -92,6 +92,20 @@ final class Preferences {
         didSet { defaults.set(zmxPathOverride, forKey: Keys.zmxPathOverride) }
     }
 
+    // MARK: - Panes
+
+    /// Draw the accent border around the focused pane when a tab is split
+    /// (zellij-style). On by default.
+    var paneHighlightBorderEnabled: Bool {
+        didSet { defaults.set(paneHighlightBorderEnabled, forKey: Keys.paneHighlightBorderEnabled) }
+    }
+
+    /// How much to dim inactive panes in a split, 0 (none) to 0.9. Clamped on
+    /// read. Default 0.45.
+    var inactivePaneDimming: Double {
+        didSet { defaults.set(inactivePaneDimming, forKey: Keys.inactivePaneDimming) }
+    }
+
     // MARK: - Sidebar icons
 
     var projectIconSymbol: String {
@@ -283,6 +297,8 @@ final class Preferences {
         scrollbackResurrectionEnabled = defaults.object(forKey: Keys.scrollbackResurrectionEnabled) as? Bool ?? true
         scrollbackRestoreMB = min(8, max(0.25, (defaults.object(forKey: Keys.scrollbackRestoreMB) as? Double) ?? 2.0))
         zmxPathOverride = defaults.string(forKey: Keys.zmxPathOverride) ?? ""
+        paneHighlightBorderEnabled = defaults.object(forKey: Keys.paneHighlightBorderEnabled) as? Bool ?? true
+        inactivePaneDimming = min(0.9, max(0, (defaults.object(forKey: Keys.inactivePaneDimming) as? Double) ?? 0.45))
         windowOpacity = (defaults.object(forKey: Keys.windowOpacity) as? Double) ?? 1.0
         windowBlurRadius = defaults.integer(forKey: Keys.windowBlurRadius)
         windowGlassEnabled = defaults.object(forKey: Keys.windowGlassEnabled) as? Bool ?? false
@@ -332,6 +348,8 @@ final class Preferences {
         static let scrollbackResurrectionEnabled = "macterm.resurrect.scrollbackEnabled"
         static let scrollbackRestoreMB = "macterm.resurrect.scrollbackMB"
         static let zmxPathOverride = "macterm.zmx.pathOverride"
+        static let paneHighlightBorderEnabled = "macterm.pane.highlightBorderEnabled"
+        static let inactivePaneDimming = "macterm.pane.inactiveDimming"
         static let windowOpacity = "macterm.window.opacity"
         static let windowBlurRadius = "macterm.window.blurRadius"
         static let windowGlassEnabled = "macterm.window.glassEnabled"
