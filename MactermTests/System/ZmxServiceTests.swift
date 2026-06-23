@@ -143,6 +143,24 @@ struct ZmxServiceTests {
     }
 
     @Test
+    func tail_keeping_bytes_returns_short_input_unchanged() {
+        let text = "a\r\nb\r\nc\r\n"
+        #expect(ZmxService.tailKeepingBytes(text, maxBytes: 1024) == text)
+    }
+
+    @Test
+    func tail_keeping_bytes_keeps_whole_lines_from_a_clean_boundary() {
+        // 1000 CRLF lines of ~12 bytes (~12KB) capped to ~2KB: keeps the tail,
+        // starts on a line boundary (no partial first line / orphaned escape),
+        // and stays within budget.
+        let text = (0 ..< 1000).map { "line\($0 % 10)xxxxx" }.joined(separator: "\r\n") + "\r\n"
+        let tail = ZmxService.tailKeepingBytes(text, maxBytes: 2048)
+        #expect(tail.utf8.count <= 2048)
+        #expect(text.hasSuffix(tail)) // it's a tail of the original
+        #expect(tail.hasPrefix("line")) // begins at a clean line start
+    }
+
+    @Test
     func chunk_on_lines_splits_crlf_text() {
         // Replayed scrollback is CRLF-normalized, and Swift treats "\r\n" as a
         // single grapheme — so a Character-based scan would never split here and

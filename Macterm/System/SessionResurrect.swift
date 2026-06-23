@@ -227,13 +227,16 @@ enum SessionResurrect {
         return lines.joined()
     }
 
-    /// Bound replayed scrollback to roughly the last `maxBytes`, so the replay
-    /// stays fast and the chunked `zmx print` stream stays modest (~200KB ≈ 67
-    /// paced chunks, which the live client takes cleanly — verified). Keeps the
-    /// most recent *whole* lines within the budget — never cutting mid-line
-    /// (which would split a color escape) or mid-codepoint. A single line larger
-    /// than the budget is kept whole rather than dropped (avoids an empty replay).
-    nonisolated static func cappedForReplay(_ vt: String, maxBytes: Int = 200 * 1024) -> String {
+    /// Bound replayed scrollback to roughly the last `maxBytes`. Keeps the most
+    /// recent *whole* lines within the budget — never cutting mid-line (which
+    /// would split a color escape) or mid-codepoint. A single line larger than
+    /// the budget is kept whole rather than dropped (avoids an empty replay).
+    ///
+    /// 2MB is the practical ceiling: replay is chunked under 4KB and paced (so it
+    /// renders on stock zmx, which truncates a single `print` past ~4KB), and a
+    /// 2MB buffer is ~700 chunks. The destination pane's own `scrollback-limit`
+    /// caps what ultimately stays visible.
+    nonisolated static func cappedForReplay(_ vt: String, maxBytes: Int = 2 * 1024 * 1024) -> String {
         guard vt.utf8.count > maxBytes else { return vt }
         var kept: [String] = []
         var total = 0
