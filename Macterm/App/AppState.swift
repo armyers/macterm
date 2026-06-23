@@ -211,7 +211,12 @@ final class AppState {
         // runs, since that's where dead sessions are seeded.
         let storedBoot = UserDefaults.standard.object(forKey: bootTimeKey) as? Int
         let rebooted = storedBoot != nil && bootTimeAtLaunch != nil && storedBoot != bootTimeAtLaunch
-        SessionResurrect.didReboot = rebooted
+        // Test affordance: `defaults write <bundle> macterm.resurrect.forceReboot
+        // -bool true` forces the dead-session (seed) path so resurrect can be
+        // exercised by quitting + `pkill zmx` + relaunching, without a real
+        // reboot. The app never writes this key, so it's a no-op in production.
+        let forced = UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot")
+        SessionResurrect.didReboot = rebooted || forced
         logger.info("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public)")
         let snapshots = workspaceStore.load()
         let valid = Set(projects.map(\.id))
