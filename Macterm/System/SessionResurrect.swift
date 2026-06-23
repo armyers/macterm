@@ -42,11 +42,16 @@ enum SessionResurrect {
     /// Fire-and-forget from `ensureNSView`; all zmx work runs off the main thread.
     static func seedIfRebooted(sessionID: String, command: String?) {
         guard didReboot, Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
+        // Scrollback replay is opt-out (the command re-run still happens either
+        // way). Read the prefs here on the main actor; the byte cap is the
+        // user's configured restore size.
+        let replayScrollback = Preferences.shared.scrollbackResurrectionEnabled
+        let maxBytes = Int(Preferences.shared.scrollbackRestoreMB * 1024 * 1024)
         // The capture pads with trailing blank rows; trim before capping so the
         // tail-cap keeps real content. CRLF-normalize so it doesn't staircase.
-        let raw = ResurrectStore.scrollback(sessionID: sessionID)
+        let raw = replayScrollback ? ResurrectStore.scrollback(sessionID: sessionID) : nil
         let scrollback = raw
-            .map { cappedForReplay(sanitizeForReplay(trimTrailingBlankLines($0))) }
+            .map { cappedForReplay(sanitizeForReplay(trimTrailingBlankLines($0)), maxBytes: maxBytes) }
             .flatMap { $0.isEmpty ? nil : $0 }
         // Log the read *before* the guard so a failed restore is unambiguous:
         // raw=-1 → file missing, raw=0 → empty, raw>0 & replay=0 → pipeline
