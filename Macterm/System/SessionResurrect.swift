@@ -44,10 +44,20 @@ enum SessionResurrect {
         guard didReboot, Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
         // The capture pads with trailing blank rows; trim before capping so the
         // tail-cap keeps real content. CRLF-normalize so it doesn't staircase.
-        let scrollback = ResurrectStore.scrollback(sessionID: sessionID)
+        let raw = ResurrectStore.scrollback(sessionID: sessionID)
+        let scrollback = raw
             .map { cappedForReplay(sanitizeForReplay(trimTrailingBlankLines($0))) }
             .flatMap { $0.isEmpty ? nil : $0 }
-        guard scrollback != nil || command?.isEmpty == false else { return }
+        // Log the read *before* the guard so a failed restore is unambiguous:
+        // raw=-1 → file missing, raw=0 → empty, raw>0 & replay=0 → pipeline
+        // collapsed it, replay>0 → we proceed.
+        debugLog(
+            "READ \(sessionID.prefix(8)): raw=\(raw?.utf8.count ?? -1)B replay=\(scrollback?.utf8.count ?? 0)B command=\(command ?? "nil")"
+        )
+        guard scrollback != nil || command?.isEmpty == false else {
+            debugLog("BAIL \(sessionID.prefix(8)): nothing to replay")
+            return
+        }
         Task.detached(priority: .utility) {
             let zmx = ZmxService.standard
             // Wait for our own attach to create the fresh session (patient —
@@ -62,8 +72,10 @@ enum SessionResurrect {
             }
             guard appeared else {
                 logger.error("resurrect seed timed out waiting for session \(sessionID, privacy: .public)")
+                debugLog("TIMEOUT \(sessionID.prefix(8)): session never appeared")
                 return
             }
+            debugLog("APPEARED \(sessionID.prefix(8)): replay=\(scrollback?.utf8.count ?? 0)B command=\(command ?? "nil")")
             // Wait for the login shell to settle at its prompt — scrollback goes
             // non-empty and stops growing — so the client is rendering and our
             // injected bytes aren't dropped or wiped by the prompt redraw.
@@ -85,12 +97,32 @@ enum SessionResurrect {
                     try? await Task.sleep(nanoseconds: 25_000_000)
                 }
                 logger.info("resurrect replay \(sessionID, privacy: .public): \(chunks.count, privacy: .public) chunks")
+                debugLog("PRINT \(sessionID.prefix(8)): \(scrollback.utf8.count) bytes in \(chunks.count) chunks")
+            } else {
+                debugLog("PRINT \(sessionID.prefix(8)): no scrollback to replay")
             }
             if let command, !command.isEmpty {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 zmx.send(sessionID: sessionID, text: command + "\r")
+                debugLog("SEND \(sessionID.prefix(8)): \(command)")
             }
             logger.info("resurrected session \(sessionID, privacy: .public)")
+        }
+    }
+
+    /// Append a line to the temp debug log, only while the `forceReboot` test
+    /// key is set. os_log isn't persisted for the signed build, so this is the
+    /// reliable channel for observing the seed during testing.
+    nonisolated static func debugLog(_ message: String) {
+        guard UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot") else { return }
+        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "seshterm-restore-debug.log")
+        let line = Data((message + "\n").utf8)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(line)
+            try? handle.close()
+        } else {
+            try? line.write(to: url, options: .atomic)
         }
     }
 
