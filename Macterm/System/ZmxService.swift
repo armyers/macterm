@@ -201,11 +201,15 @@ extension ZmxService {
         }
     }
 
-    /// The detector Macterm uses at runtime: the common install locations for
-    /// Homebrew (Apple Silicon + Intel), MacPorts, and cargo.
+    /// The detector Macterm uses at runtime: common install locations, checked in
+    /// order. We can't consult `$PATH` — a GUI app launched by Launch Services
+    /// doesn't inherit the user's interactive shell PATH — so this list is the
+    /// search path. `~/.local/bin` is first so a user-built zmx (e.g. a locally
+    /// patched daemon) wins over a Homebrew install without symlink surgery.
     static var standard: ZmxService {
         ZmxService(
             binaryCandidates: [
+                NSHomeDirectory() + "/.local/bin/zmx",
                 "/opt/homebrew/bin/zmx",
                 "/usr/local/bin/zmx",
                 "/opt/local/bin/zmx",
