@@ -49,20 +49,49 @@ struct ZmxService {
         return Self.parseList(output)
     }
 
-    /// The session's scrollback as ANSI (`zmx history <id> --vt`), capped to the
-    /// last `maxLines` lines so the saved file stays bounded. nil on failure.
-    func history(sessionID: String, maxLines: Int = 2000) -> String? {
+    /// The session's scrollback as ANSI (`zmx history <id> --vt`), capped to
+    /// roughly the last `maxBytes` so the saved file stays bounded. Headroom over
+    /// the replay cap (`SessionResurrect.cappedForReplay`) so capture isn't the
+    /// limiting factor. nil on failure.
+    ///
+    /// Caps by UTF-8 bytes, not lines: `--vt` uses CRLF line endings and Swift
+    /// treats `"\r\n"` as one grapheme, so a `split(separator: "\n")` line cap
+    /// silently never matches and keeps everything. Trims to the next newline so
+    /// the first retained line isn't a partial (which could orphan an SGR escape).
+    func history(sessionID: String, maxBytes: Int = 2_621_440) -> String? {
         guard let output = run(["history", sessionID, "--vt"]) else { return nil }
-        let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
-        let tail = lines.suffix(maxLines)
-        return tail.joined(separator: "\n")
+        return Self.tailKeepingBytes(output, maxBytes: maxBytes)
+    }
+
+    /// Keep roughly the last `maxBytes` of `text`, trimmed forward to the next
+    /// newline so the first retained line isn't a partial (which could orphan an
+    /// SGR escape). Returns `text` unchanged when already within budget. Pure.
+    static func tailKeepingBytes(_ text: String, maxBytes: Int) -> String {
+        guard text.utf8.count > maxBytes else { return text }
+        let bytes = Array(text.utf8)
+        var start = bytes.count - maxBytes
+        while start < bytes.count, bytes[start] != 0x0A {
+            start += 1
+        } // 0x0A = '\n'
+        if start < bytes.count {
+            start += 1 // start just after the newline
+        } else {
+            start = bytes.count - maxBytes // no newline in the tail; keep the raw tail
+        }
+        // Lossy decode so a byte-aligned cut that lands mid-codepoint yields
+        // U+FFFD rather than dropping the capture (the lint rule prefers the
+        // strict failable initializer, which is exactly what we're avoiding).
+        // swiftlint:disable:next optional_data_string_conversion
+        return String(decoding: bytes[start...], as: UTF8.self)
     }
 
     /// Inject `text` into the session's terminal display (`zmx print`), preserving
     /// ANSI/color. Raw bytes, not pty input — doesn't run anything. One IPC
-    /// `.Output` message; a single message larger than ~4KB doesn't render in the
-    /// attached client (zmx's relay caps there), so callers replaying large
-    /// scrollback chunk via `chunkOnLines` and pace the calls (see
+    /// `.Output` message. Stock zmx silently drops a single message in the
+    /// ~4-8KB band (the daemon reads one 4096-byte chunk then closes on the
+    /// POLLHUP `print` raises by exiting immediately); a patched daemon handles
+    /// any size. So callers replaying large scrollback chunk via `chunkOnLines`
+    /// (under 4KB) and pace the calls to stay correct on stock zmx (see
     /// `SessionResurrect.seedIfRebooted`).
     func print(sessionID: String, text: String) {
         _ = run(["print", sessionID, text])
