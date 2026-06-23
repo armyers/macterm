@@ -24,8 +24,7 @@ enum SystemBootTime {
 /// still-live session — scrollback and the running process are intact, nothing
 /// to do. On a reboot the daemon is gone, so that same attach creates a *fresh*
 /// login shell; we then seed it from the snapshot: replay the saved scrollback
-/// (the shell's persistent context, captured in-process via the surface's
-/// `read_text` — plain text for now; color is a follow-up), then re-run the
+/// (captured in color as ANSI via `zmx history --vt`), then re-run the
 /// restartable program on top — so quitting the program drops back into the
 /// shell with its history, like tmux-resurrect.
 @MainActor
@@ -37,15 +36,13 @@ enum SessionResurrect {
 
     /// Seed a freshly-created post-reboot session: once the fresh shell has
     /// settled at its prompt, replay the saved scrollback with `zmx print` —
-    /// which streams into the live attached client (the pane) and renders, the
-    /// channel that demonstrably works (the resume-script `cat` ran inside the
-    /// session before the client was rendering, so it never appeared) — then
-    /// re-run the restartable command on top. No-op unless we rebooted,
+    /// which streams into the live attached client (the pane) and renders —
+    /// then re-run the restartable command on top. No-op unless we rebooted,
     /// persistence is on, zmx is available, and there's something to replay.
     /// Fire-and-forget from `ensureNSView`; all zmx work runs off the main thread.
     static func seedIfRebooted(sessionID: String, command: String?) {
         guard didReboot, Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
-        // `read_text` pads with trailing blank rows; trim before capping so the
+        // The capture pads with trailing blank rows; trim before capping so the
         // tail-cap keeps real content. CRLF-normalize so it doesn't staircase.
         let scrollback = ResurrectStore.scrollback(sessionID: sessionID)
             .map { cappedForReplay(sanitizeForReplay(trimTrailingBlankLines($0))) }
@@ -65,10 +62,8 @@ enum SessionResurrect {
             }
             guard appeared else {
                 logger.error("resurrect seed timed out waiting for session \(sessionID, privacy: .public)")
-                debugLog("SEED \(sessionID.prefix(8)): TIMED OUT waiting for session")
                 return
             }
-            debugLog("SEED \(sessionID.prefix(8)): appeared, scrollback=\(scrollback?.utf8.count ?? 0)B command=\(command ?? "nil")")
             // Wait for the login shell to settle at its prompt — scrollback goes
             // non-empty and stops growing — so the client is rendering and our
             // injected bytes aren't dropped or wiped by the prompt redraw.
@@ -80,52 +75,32 @@ enum SessionResurrect {
                 lastLen = len
             }
             if let scrollback {
-                // zmx renders a single print only up to ~4KB, and drops replays
-                // beyond ~50KB total when sent back-to-back. So chunk under 4KB
-                // (cappedForReplay already bounds the total to ~48KB) and pace
-                // the calls so the client keeps up.
+                // zmx renders a single `print` only up to ~4KB (the client relay's
+                // read buffer). Larger replays drop only when sent back-to-back —
+                // chunked under 4KB and paced, the live client takes ~200KB cleanly
+                // (verified). So chunk under 4KB and pace the calls.
                 let chunks = ZmxService.chunkOnLines(scrollback, maxBytes: 3000)
                 for chunk in chunks {
                     zmx.print(sessionID: sessionID, text: chunk)
                     try? await Task.sleep(nanoseconds: 25_000_000)
                 }
-                logger.notice("resurrect print \(sessionID, privacy: .public): \(chunks.count, privacy: .public) chunks")
-                debugLog("PRINT \(sessionID.prefix(8)): \(scrollback.utf8.count) bytes in \(chunks.count) chunks")
-            } else {
-                debugLog("PRINT \(sessionID.prefix(8)): no scrollback to replay")
+                logger.info("resurrect replay \(sessionID, privacy: .public): \(chunks.count, privacy: .public) chunks")
             }
             if let command, !command.isEmpty {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 zmx.send(sessionID: sessionID, text: command + "\r")
-                debugLog("SEND \(sessionID.prefix(8)): \(command)")
             }
-            logger.notice("resurrected session \(sessionID, privacy: .public)")
-        }
-    }
-
-    /// Append a line to the temp debug log, only while the `forceReboot` test
-    /// key is set. os_log isn't persisted for the signed build, so this is the
-    /// reliable channel for observing the seed during testing.
-    nonisolated static func debugLog(_ message: String) {
-        guard UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot") else { return }
-        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "seshterm-restore-debug.log")
-        let line = Data((message + "\n").utf8)
-        if let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            handle.write(line)
-            try? handle.close()
-        } else {
-            try? line.write(to: url, options: .atomic)
+            logger.info("resurrected session \(sessionID, privacy: .public)")
         }
     }
 
     /// Normalize captured scrollback for replay: keep SGR color sequences,
     /// printable text, and newlines; drop cursor moves, erases, DEC private
     /// modes, and OSC; normalize every CR / LF / CRLF to an explicit CRLF.
-    /// Scrollback now comes from `read_text` (plain text), so the escape-
-    /// stripping is mostly defensive — but it stays correct if a future styled
-    /// `read_text` emits SGR, and the CRLF normalization is what fixes the
-    /// "staircase" when the text is `cat` into the pre-shell pty (no ONLCR).
+    /// Scrollback is the ANSI dump from `zmx history --vt`, so keeping SGR is
+    /// what preserves color; dropping the positioning/mode escapes keeps the
+    /// replay from fighting the fresh shell's own cursor, and the CRLF
+    /// normalization stops the "staircase" when bare LFs hit a pty without ONLCR.
     nonisolated static func sanitizeForReplay(_ vt: String) -> String {
         let s = Array(vt.unicodeScalars)
         let n = s.count
@@ -186,31 +161,55 @@ enum SessionResurrect {
         return String(out)
     }
 
-    /// Trim replayed scrollback to roughly the last `maxBytes`, so it stays well
-    /// under `ARG_MAX` when passed to `zmx print`. Keeps the most recent *whole*
-    /// lines within the budget — never cutting mid-line (which would split a
-    /// color escape) or mid-codepoint.
-    /// Drop trailing blank / whitespace-only lines. `ghostty_surface_read_text`
-    /// returns the whole screen region, so the live screen's empty rows below the
-    /// prompt come through as blank trailing lines; replaying them would push the
-    /// real history off-screen (and defeat the tail-based cap).
-    nonisolated static func trimTrailingBlankLines(_ text: String) -> String {
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-            lines.removeLast()
+    /// Split into lines on the `"\n"` *scalar*, each line keeping its trailing
+    /// break, so `joined()` reconstructs the input exactly. `String.split(
+    /// separator: "\n")` is `Character`-based and Swift treats `"\r\n"` as a
+    /// single grapheme — so on CRLF-normalized text it never matches and returns
+    /// the whole string as one giant "line". That silently broke the byte-budget
+    /// walk in `cappedForReplay` (one oversize line → nothing kept → empty).
+    nonisolated static func linesKeepingBreaks(_ text: String) -> [String] {
+        var lines: [String] = []
+        var line = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            line.append(scalar)
+            if scalar == "\n" {
+                lines.append(String(line))
+                line = String.UnicodeScalarView()
+            }
         }
-        return lines.joined(separator: "\n")
+        if !line.isEmpty { lines.append(String(line)) }
+        return lines
     }
 
-    nonisolated static func cappedForReplay(_ vt: String, maxBytes: Int = 48 * 1024) -> String {
+    /// Drop trailing blank / whitespace-only lines. `zmx history --vt` dumps the
+    /// whole screen region, so the empty rows below the live prompt come through
+    /// as blank trailing lines; replaying them would push the real history
+    /// off-screen (and defeat the tail-based cap).
+    nonisolated static func trimTrailingBlankLines(_ text: String) -> String {
+        var lines = linesKeepingBreaks(text)
+        while let last = lines.last,
+              last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            lines.removeLast()
+        }
+        return lines.joined()
+    }
+
+    /// Bound replayed scrollback to roughly the last `maxBytes`, so the replay
+    /// stays fast and the chunked `zmx print` stream stays modest (~200KB ≈ 67
+    /// paced chunks, which the live client takes cleanly — verified). Keeps the
+    /// most recent *whole* lines within the budget — never cutting mid-line
+    /// (which would split a color escape) or mid-codepoint. A single line larger
+    /// than the budget is kept whole rather than dropped (avoids an empty replay).
+    nonisolated static func cappedForReplay(_ vt: String, maxBytes: Int = 200 * 1024) -> String {
         guard vt.utf8.count > maxBytes else { return vt }
-        var kept: [Substring] = []
+        var kept: [String] = []
         var total = 0
-        for line in vt.split(separator: "\n", omittingEmptySubsequences: false).reversed() {
-            total += line.utf8.count + 1 // + the newline join
-            if total > maxBytes { break }
+        for line in linesKeepingBreaks(vt).reversed() {
+            total += line.utf8.count
+            if total > maxBytes, !kept.isEmpty { break }
             kept.append(line)
         }
-        return kept.reversed().joined(separator: "\n")
+        return kept.reversed().joined()
     }
 }

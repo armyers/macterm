@@ -71,30 +71,37 @@ struct ZmxService {
     /// Split `text` into pieces of at most ~`maxBytes`, breaking only at line
     /// boundaries so an SGR/escape sequence (always within a line) is never cut.
     /// A single line longer than `maxBytes` is sent whole (rare). Pure/testable.
+    ///
+    /// Scans at the unicode-scalar level, not by `Character`: replayed scrollback
+    /// is CRLF-normalized, and Swift treats `"\r\n"` as a *single* grapheme
+    /// cluster — so `Character`-based iteration never sees the `\n` and would
+    /// return the whole text as one unsplittable chunk.
     static func chunkOnLines(_ text: String, maxBytes: Int) -> [String] {
         guard text.utf8.count > maxBytes else { return text.isEmpty ? [] : [text] }
         var chunks: [String] = []
         var current = ""
-        func add(_ line: Substring) {
-            if !current.isEmpty, current.utf8.count + line.utf8.count > maxBytes {
+        var currentBytes = 0
+        var line = String.UnicodeScalarView()
+        /// Emit the accumulated line into `current`, flushing first if it would
+        /// overflow the budget — keeping the `\n` attached so the chunks
+        /// concatenate back to `text` exactly.
+        func emitLine() {
+            let s = String(line)
+            let bytes = s.utf8.count
+            if currentBytes > 0, currentBytes + bytes > maxBytes {
                 chunks.append(current)
                 current = ""
+                currentBytes = 0
             }
-            current += line
+            current += s
+            currentBytes += bytes
+            line = String.UnicodeScalarView()
         }
-        // Cut at real newline positions, keeping the `\n` attached to its line,
-        // so concatenating the chunks reproduces `text` exactly.
-        var lineStart = text.startIndex
-        var i = text.startIndex
-        while i < text.endIndex {
-            if text[i] == "\n" {
-                let next = text.index(after: i)
-                add(text[lineStart ..< next])
-                lineStart = next
-            }
-            i = text.index(after: i)
+        for scalar in text.unicodeScalars {
+            line.append(scalar)
+            if scalar == "\n" { emitLine() }
         }
-        if lineStart < text.endIndex { add(text[lineStart...]) }
+        if !line.isEmpty { emitLine() }
         if !current.isEmpty { chunks.append(current) }
         return chunks
     }

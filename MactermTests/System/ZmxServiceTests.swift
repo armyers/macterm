@@ -143,6 +143,20 @@ struct ZmxServiceTests {
     }
 
     @Test
+    func chunk_on_lines_splits_crlf_text() {
+        // Replayed scrollback is CRLF-normalized, and Swift treats "\r\n" as a
+        // single grapheme — so a Character-based scan would never split here and
+        // return one giant chunk. Scalar-level scanning must still break it.
+        let text = (0 ..< 20).map { _ in String(repeating: "y", count: 98) }.joined(separator: "\r\n") + "\r\n"
+        let chunks = ZmxService.chunkOnLines(text, maxBytes: 600)
+        #expect(chunks.count > 1)
+        #expect(chunks.joined() == text) // lossless
+        // Check the last *scalar*, not hasSuffix("\n"): a chunk ending in CRLF has
+        // the "\r\n" grapheme as its final Character, so hasSuffix("\n") is false.
+        #expect(chunks.allSatisfy { $0.unicodeScalars.last == "\n" }) // broken only at line ends
+    }
+
+    @Test
     func trailing_cmd_field_does_not_pollute_start_dir() {
         // Sessions started with a command carry a trailing `cmd=…` after
         // `start_dir=…`; splitting on TAB keeps start_dir clean.

@@ -21,6 +21,19 @@ struct SessionResurrectTests {
     }
 
     @Test
+    func long_crlf_scrollback_is_not_collapsed_to_empty() {
+        // Replay text is CRLF-normalized, and Swift treats "\r\n" as one grapheme,
+        // so a Character-based `split(separator: "\n")` saw the whole dump as one
+        // oversize "line" and the budget walk returned empty. Real-world repro:
+        // ~576KB of color scrollback came back as 0 bytes. Must keep a real tail.
+        let vt = (0 ..< 4000).map { "L\($0 % 10)" }.joined(separator: "\r\n") + "\r\n"
+        let capped = SessionResurrect.cappedForReplay(vt, maxBytes: 1024)
+        #expect(!capped.isEmpty)
+        #expect(capped.utf8.count <= 1024)
+        #expect(vt.hasSuffix(capped)) // tail preserved
+    }
+
+    @Test
     func sanitize_keeps_color_and_text_but_strips_positioning() {
         let esc = "\u{1B}"
         let vt = "\(esc)[2J\(esc)[H\(esc)[31mred\(esc)[0m\(esc)[2;8Htext\r\nmore\r"
@@ -46,7 +59,9 @@ struct SessionResurrectTests {
     func trims_trailing_blank_lines_but_keeps_interior() {
         let input = "line one\n\nline two\n   \n\t\n\n"
         let out = SessionResurrect.trimTrailingBlankLines(input)
-        #expect(out == "line one\n\nline two") // interior blank kept, trailing dropped
+        // Interior blank kept, trailing blank lines dropped; the last real line
+        // keeps its own newline (line terminators are preserved, not re-joined).
+        #expect(out == "line one\n\nline two\n")
     }
 
     @Test

@@ -211,13 +211,8 @@ final class AppState {
         // runs, since that's where dead sessions are seeded.
         let storedBoot = UserDefaults.standard.object(forKey: bootTimeKey) as? Int
         let rebooted = storedBoot != nil && bootTimeAtLaunch != nil && storedBoot != bootTimeAtLaunch
-        // Testing override: `defaults write <bundle> macterm.resurrect.forceReboot -bool true`
-        // forces the dead-session (seed) path without an actual reboot or the
-        // fragile boot-time fake. We never write this key, so it persists across
-        // launches until the tester clears it.
-        let forced = UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot")
-        SessionResurrect.didReboot = rebooted || forced
-        logger.notice("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public) forced=\(forced, privacy: .public)")
+        SessionResurrect.didReboot = rebooted
+        logger.info("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public)")
         let snapshots = workspaceStore.load()
         let valid = Set(projects.map(\.id))
         // A committed layout file is the source of truth: skip restoring the
@@ -225,21 +220,11 @@ final class AppState {
         // nil so it rebuilds from `.macterm/layout.yaml` on open (below / on
         // first select). Projects with no layout file restore their snapshot.
         let pathByID = Dictionary(projects.map { ($0.id, $0.path) }, uniquingKeysWith: { a, _ in a })
-        func snapIDs(_ n: SplitNodeSnapshot) -> [String] {
-            switch n {
-            case let .pane(p): [p.sessionID ?? "nil"]
-            case let .split(b): snapIDs(b.first) + snapIDs(b.second)
-            }
-        }
-        let loadedIDs = snapshots.flatMap { $0.tabs.flatMap { snapIDs($0.splitRoot) } }
-        resurrectDebug("LOAD: projects=\(projects.count) snapshots=\(snapshots.count) loadedSessionIDs=\(loadedIDs)")
         for ws in WorkspaceSerializer.restore(from: snapshots, validIDs: valid)
             where !LayoutFile.exists(atProjectRoot: pathByID[ws.projectID] ?? "")
         {
             workspaces[ws.projectID] = ws
         }
-        let restoredIDs = workspaces.values.flatMap { $0.tabs.flatMap { $0.splitRoot.allPanes().map(\.sessionID) } }
-        resurrectDebug("RESTORED: workspaces=\(workspaces.count) restoredSessionIDs=\(restoredIDs)")
         if let id = Preferences.shared.activeProjectID,
            let project = projects.first(where: { $0.id == id })
         {
@@ -259,11 +244,6 @@ final class AppState {
     }
 
     func saveWorkspaces() {
-        let summary = workspaces.values.map { ws in
-            let panes = ws.tabs.reduce(0) { $0 + $1.splitRoot.allPanes().count }
-            return "\(ws.projectID.uuidString.prefix(8)):tabs=\(ws.tabs.count),panes=\(panes)"
-        }.joined(separator: " ")
-        resurrectDebug("SAVE: [\(summary)] terminating=\(AppTerminationState.isTerminating)")
         workspaceStore.save(WorkspaceSerializer.snapshot(workspaces, resurrectCommands: capturedResurrectCommands))
         // Record the boot time these sessions belong to, so the next launch can
         // tell whether the machine rebooted (sessions dead) or not (reattach).
@@ -325,8 +305,7 @@ final class AppState {
                 }
             }
             ResurrectStore.prune(keeping: referenced)
-            let busyCmds = commands.values.joined(separator: " | ")
-            logger.notice("captureResurrectState: captured \(captured, privacy: .public), busy=[\(busyCmds, privacy: .public)]")
+            logger.info("captureResurrect: \(captured, privacy: .public) scrollback, \(commands.count, privacy: .public) restartable")
             await MainActor.run {
                 self.capturedResurrectCommands = commands
                 self.saveWorkspaces()
@@ -1023,24 +1002,7 @@ final class AppState {
 
     private func ensureWorkspace(projectID: UUID, path: String) {
         if workspaces[projectID] == nil {
-            resurrectDebug("ensureWorkspace: CREATED DEFAULT for \(projectID) (no restored workspace)")
             workspaces[projectID] = Workspace(projectID: projectID, projectPath: path)
-        }
-    }
-
-    /// Append a line to a temp debug log, only while the `forceReboot` test
-    /// override is set. os_log isn't persisted for this signed build, so this is
-    /// the reliable channel for diagnosing restore/resurrect during testing.
-    private func resurrectDebug(_ message: String) {
-        guard UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot") else { return }
-        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "seshterm-restore-debug.log")
-        let line = Data((message + "\n").utf8)
-        if let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            handle.write(line)
-            try? handle.close()
-        } else {
-            try? line.write(to: url, options: .atomic)
         }
     }
 }
