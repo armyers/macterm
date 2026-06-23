@@ -44,8 +44,14 @@ private struct GeneralSettings: View {
     private var eagerlyStartProjectTabs = true
     @AppStorage(Preferences.Keys.sessionPersistenceEnabled)
     private var sessionPersistenceEnabled = false
+    @AppStorage(Preferences.Keys.scrollbackResurrectionEnabled)
+    private var scrollbackResurrectionEnabled = true
+    @AppStorage(Preferences.Keys.scrollbackRestoreMB)
+    private var scrollbackRestoreMB = 2.0
     @State
     private var ghosttyConfigPath: String = Preferences.shared.userGhosttyConfigPath
+    @State
+    private var zmxPath: String = Preferences.shared.zmxPathOverride
 
     private let ghosttyCLI = GhosttyCLI.standard
     private let zmxAvailable = ZmxService.standard.isAvailable
@@ -120,6 +126,41 @@ private struct GeneralSettings: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 }
+
+                Group {
+                    HStack {
+                        TextField("zmx path", text: $zmxPath, prompt: Text("auto-detect"))
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { Preferences.shared.zmxPathOverride = zmxPath }
+                        Button("Browse…") { browseZmx() }
+                    }
+                    Text(
+                        "Override the zmx binary location if it's installed where Macterm doesn't look. "
+                            + "Blank = auto-detect. Takes effect for new panes."
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                    Toggle("Resurrect scrollback after a reboot", isOn: $scrollbackResurrectionEnabled)
+                        .onChange(of: scrollbackResurrectionEnabled) { _, v in
+                            Preferences.shared.scrollbackResurrectionEnabled = v
+                        }
+                    if scrollbackResurrectionEnabled {
+                        Stepper(value: $scrollbackRestoreMB, in: 0.25 ... 8, step: 0.25) {
+                            Text("Restore up to \(scrollbackRestoreMB, specifier: "%g") MB per pane")
+                        }
+                        .onChange(of: scrollbackRestoreMB) { _, v in
+                            Preferences.shared.scrollbackRestoreMB = v
+                        }
+                        Text(
+                            "Most-recent scrollback, replayed in color. What stays visible is bounded "
+                                + "by the pane's own scrollback-limit."
+                        )
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(!sessionPersistenceEnabled)
             }
         }
         .formStyle(.grouped)
@@ -150,6 +191,17 @@ private struct GeneralSettings: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         ghosttyConfigPath = url.path(percentEncoded: false)
         commitPath()
+    }
+
+    private func browseZmx() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        zmxPath = url.path(percentEncoded: false)
+        Preferences.shared.zmxPathOverride = zmxPath
     }
 }
 

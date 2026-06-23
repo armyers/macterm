@@ -207,14 +207,24 @@ extension ZmxService {
     /// search path. `~/.local/bin` is first so a user-built zmx (e.g. a locally
     /// patched daemon) wins over a Homebrew install without symlink surgery.
     static var standard: ZmxService {
-        ZmxService(
-            binaryCandidates: [
-                NSHomeDirectory() + "/.local/bin/zmx",
-                "/opt/homebrew/bin/zmx",
-                "/usr/local/bin/zmx",
-                "/opt/local/bin/zmx",
-                NSHomeDirectory() + "/.cargo/bin/zmx",
-            ],
+        var candidates: [String] = []
+        // User-set override (Settings → Session Persistence), tried first so an
+        // install outside the list below is found. Read straight from
+        // UserDefaults to stay non-isolated (Preferences is @MainActor).
+        if let override = UserDefaults.standard.string(forKey: Preferences.Keys.zmxPathOverride),
+           !override.isEmpty
+        {
+            candidates.append((override as NSString).expandingTildeInPath)
+        }
+        candidates.append(contentsOf: [
+            NSHomeDirectory() + "/.local/bin/zmx",
+            "/opt/homebrew/bin/zmx",
+            "/usr/local/bin/zmx",
+            "/opt/local/bin/zmx",
+            NSHomeDirectory() + "/.cargo/bin/zmx",
+        ])
+        return ZmxService(
+            binaryCandidates: candidates,
             isExecutable: { FileManager.default.isExecutableFile(atPath: $0) }
         )
     }

@@ -69,6 +69,29 @@ final class Preferences {
         didSet { defaults.set(sessionPersistenceEnabled, forKey: Keys.sessionPersistenceEnabled) }
     }
 
+    /// Replay each zmx-backed pane's color scrollback after a reboot (the
+    /// tmux-resurrect path). On by default. When off, a rebooted pane still
+    /// re-runs its restartable command (and reattaches live across an app quit) —
+    /// it just doesn't replay prior scrollback. No effect without session
+    /// persistence + zmx.
+    var scrollbackResurrectionEnabled: Bool {
+        didSet { defaults.set(scrollbackResurrectionEnabled, forKey: Keys.scrollbackResurrectionEnabled) }
+    }
+
+    /// How much scrollback to capture and replay per pane on reboot, in MB
+    /// (byte-capped, most-recent tail). Bounded so replay stays quick; the
+    /// destination pane's own `scrollback-limit` caps what ultimately stays
+    /// visible. Clamped to a sane range on read.
+    var scrollbackRestoreMB: Double {
+        didSet { defaults.set(scrollbackRestoreMB, forKey: Keys.scrollbackRestoreMB) }
+    }
+
+    /// Explicit path to the `zmx` binary, for installs outside the built-in
+    /// search list. Empty = auto-detect from the standard locations.
+    var zmxPathOverride: String {
+        didSet { defaults.set(zmxPathOverride, forKey: Keys.zmxPathOverride) }
+    }
+
     // MARK: - Sidebar icons
 
     var projectIconSymbol: String {
@@ -257,6 +280,9 @@ final class Preferences {
         autoTilingEnabled = defaults.bool(forKey: Keys.autoTiling)
         eagerlyStartProjectTabs = (defaults.object(forKey: Keys.eagerlyStartProjectTabs) as? Bool) ?? true
         sessionPersistenceEnabled = defaults.object(forKey: Keys.sessionPersistenceEnabled) as? Bool ?? false
+        scrollbackResurrectionEnabled = defaults.object(forKey: Keys.scrollbackResurrectionEnabled) as? Bool ?? true
+        scrollbackRestoreMB = min(8, max(0.25, (defaults.object(forKey: Keys.scrollbackRestoreMB) as? Double) ?? 2.0))
+        zmxPathOverride = defaults.string(forKey: Keys.zmxPathOverride) ?? ""
         windowOpacity = (defaults.object(forKey: Keys.windowOpacity) as? Double) ?? 1.0
         windowBlurRadius = defaults.integer(forKey: Keys.windowBlurRadius)
         windowGlassEnabled = defaults.object(forKey: Keys.windowGlassEnabled) as? Bool ?? false
@@ -303,6 +329,9 @@ final class Preferences {
         static let autoTiling = "macterm.autoTiling.enabled"
         static let eagerlyStartProjectTabs = "macterm.eagerlyStartProjectTabs.enabled"
         static let sessionPersistenceEnabled = "macterm.sessionPersistence.enabled"
+        static let scrollbackResurrectionEnabled = "macterm.resurrect.scrollbackEnabled"
+        static let scrollbackRestoreMB = "macterm.resurrect.scrollbackMB"
+        static let zmxPathOverride = "macterm.zmx.pathOverride"
         static let windowOpacity = "macterm.window.opacity"
         static let windowBlurRadius = "macterm.window.blurRadius"
         static let windowGlassEnabled = "macterm.window.glassEnabled"

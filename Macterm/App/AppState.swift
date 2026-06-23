@@ -303,6 +303,11 @@ final class AppState {
         guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
         let referenced = referencedSessionIDs()
         guard !referenced.isEmpty else { return }
+        // Capture scrollback only when resurrection is on; capture a little more
+        // than we'll replay so the tail isn't starved after sanitize trims
+        // escapes. Commands are captured regardless (cheap, always useful).
+        let captureScrollback = Preferences.shared.scrollbackResurrectionEnabled
+        let captureBytes = Int(Preferences.shared.scrollbackRestoreMB * 1024 * 1024) + 512 * 1024
         Task.detached(priority: .utility) {
             let zmx = ZmxService.standard
             let pidByID = Dictionary(
@@ -318,8 +323,8 @@ final class AppState {
             }
             let busy = Set(commands.keys)
             var captured = 0
-            for id in referenced where !busy.contains(id) && pidByID[id] != nil {
-                if let vt = zmx.history(sessionID: id), !vt.isEmpty {
+            for id in referenced where captureScrollback && !busy.contains(id) && pidByID[id] != nil {
+                if let vt = zmx.history(sessionID: id, maxBytes: captureBytes), !vt.isEmpty {
                     ResurrectStore.write(sessionID: id, scrollback: vt)
                     captured += 1
                 }
