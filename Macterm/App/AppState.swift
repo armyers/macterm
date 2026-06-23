@@ -225,22 +225,21 @@ final class AppState {
         // nil so it rebuilds from `.macterm/layout.yaml` on open (below / on
         // first select). Projects with no layout file restore their snapshot.
         let pathByID = Dictionary(projects.map { ($0.id, $0.path) }, uniquingKeysWith: { a, _ in a })
+        func snapIDs(_ n: SplitNodeSnapshot) -> [String] {
+            switch n {
+            case let .pane(p): [p.sessionID ?? "nil"]
+            case let .split(b): snapIDs(b.first) + snapIDs(b.second)
+            }
+        }
+        let loadedIDs = snapshots.flatMap { $0.tabs.flatMap { snapIDs($0.splitRoot) } }
+        resurrectDebug("LOAD: projects=\(projects.count) snapshots=\(snapshots.count) loadedSessionIDs=\(loadedIDs)")
         for ws in WorkspaceSerializer.restore(from: snapshots, validIDs: valid)
             where !LayoutFile.exists(atProjectRoot: pathByID[ws.projectID] ?? "")
         {
             workspaces[ws.projectID] = ws
         }
-        // Diagnostic (persisted at .notice): the restored panes' sessionIDs and
-        // whether each has a saved scrollback file. If the ids here don't match
-        // the scrollback files, restore isn't reusing the persisted sessionID.
-        for ws in workspaces.values {
-            for tab in ws.tabs {
-                for pane in tab.splitRoot.allPanes() {
-                    let hasFile = ResurrectStore.scrollback(sessionID: pane.sessionID) != nil
-                    logger.notice("restored pane session=\(pane.sessionID, privacy: .public) scrollbackFile=\(hasFile, privacy: .public)")
-                }
-            }
-        }
+        let restoredIDs = workspaces.values.flatMap { $0.tabs.flatMap { $0.splitRoot.allPanes().map(\.sessionID) } }
+        resurrectDebug("RESTORED: workspaces=\(workspaces.count) restoredSessionIDs=\(restoredIDs)")
         if let id = Preferences.shared.activeProjectID,
            let project = projects.first(where: { $0.id == id })
         {
@@ -1037,7 +1036,24 @@ final class AppState {
 
     private func ensureWorkspace(projectID: UUID, path: String) {
         if workspaces[projectID] == nil {
+            resurrectDebug("ensureWorkspace: CREATED DEFAULT for \(projectID) (no restored workspace)")
             workspaces[projectID] = Workspace(projectID: projectID, projectPath: path)
+        }
+    }
+
+    /// Append a line to a temp debug log, only while the `forceReboot` test
+    /// override is set. os_log isn't persisted for this signed build, so this is
+    /// the reliable channel for diagnosing restore/resurrect during testing.
+    private func resurrectDebug(_ message: String) {
+        guard UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot") else { return }
+        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "seshterm-restore-debug.log")
+        let line = Data((message + "\n").utf8)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(line)
+            try? handle.close()
+        } else {
+            try? line.write(to: url, options: .atomic)
         }
     }
 }
