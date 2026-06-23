@@ -291,24 +291,19 @@ final class AppState {
     /// restartable-command cache `snapshot` reads, so a post-reboot restore can
     /// replay both. No-op when persistence is off or zmx is absent.
     ///
-    /// Scrollback is read **in-process** from each pane's own ghostty surface
-    /// (`readScrollback` → `ghostty_surface_read_text`): the full history that
-    /// streamed through zmx, not zmx's one-screen `--vt` snapshot — far more
-    /// reliable, and no subprocess. Panes in a full-screen / raw-mode program are
-    /// skipped (their surface shows the program's UI, not shell history), keeping
-    /// the last good capture. The command lookup still needs zmx — the surface's
-    /// foreground pid is the zmx *client*, not the program — so it runs off-main.
-    /// Driven by `resurrectTimer` (~15s); results applied on main.
+    /// Scrollback comes from `zmx history --vt` — the **daemon's** authoritative
+    /// full scrollback (its internal terminal, `screen = .all`, with per-cell
+    /// SGR color), not the client surface's `read_text` (which after a reattach
+    /// only holds a one-screen snapshot — the cause of the ~58-byte captures).
+    /// A session running an allowlisted full-screen program (editor/pager) is
+    /// "busy": its terminal shows the program UI, not shell history, so we skip
+    /// it and keep the last good capture. All off-main (zmx is subprocess).
+    /// Driven by `resurrectTimer` (~15s).
     func captureResurrectState() {
         guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
         let referenced = referencedSessionIDs()
         guard !referenced.isEmpty else { return }
         Task.detached(priority: .utility) {
-            // 1. zmx introspection (subprocess): per session, the restartable
-            //    foreground command. A session running an allowlisted full-screen
-            //    program (editor/pager/monitor) is "busy" — its surface shows the
-            //    program's UI, not shell history, so we skip its scrollback and
-            //    keep the last good capture.
             let zmx = ZmxService.standard
             let pidByID = Dictionary(
                 uniqueKeysWithValues: zmx.list().filter(\.isHealthy).compactMap { s in s.pid.map { (s.name, $0) } }
@@ -322,41 +317,21 @@ final class AppState {
                 }
             }
             let busy = Set(commands.keys)
-            // 2. Read scrollback in-process from each idle pane's ghostty surface
-            //    (main thread). NOTE: a zmx client's pty is always raw, so we do
-            //    NOT use raw-mode to detect "busy" — the command lookup does.
-            let scrollbacks = await self.readScrollbacks(skipping: busy)
-            for (id, text) in scrollbacks {
-                ResurrectStore.write(sessionID: id, scrollback: text)
+            var captured = 0
+            for id in referenced where !busy.contains(id) && pidByID[id] != nil {
+                if let vt = zmx.history(sessionID: id), !vt.isEmpty {
+                    ResurrectStore.write(sessionID: id, scrollback: vt)
+                    captured += 1
+                }
             }
             ResurrectStore.prune(keeping: referenced)
             let busyCmds = commands.values.joined(separator: " | ")
-            logger.notice("captureResurrectState: captured \(scrollbacks.count, privacy: .public), busy=[\(busyCmds, privacy: .public)]")
+            logger.notice("captureResurrectState: captured \(captured, privacy: .public), busy=[\(busyCmds, privacy: .public)]")
             await MainActor.run {
                 self.capturedResurrectCommands = commands
                 self.saveWorkspaces()
             }
         }
-    }
-
-    /// Read each non-ephemeral pane's full scrollback in-process (ghostty
-    /// `read_text`), skipping sessions in `skipping` (running a full-screen
-    /// program, whose surface shows the program UI rather than history).
-    @MainActor
-    private func readScrollbacks(skipping: Set<String>) -> [String: String] {
-        var out: [String: String] = [:]
-        for ws in workspaces.values {
-            for tab in ws.tabs {
-                for pane in tab.splitRoot.allPanes()
-                    where !pane.ephemeral && !skipping.contains(pane.sessionID)
-                {
-                    if let text = pane.nsView?.readScrollback(), !text.isEmpty {
-                        out[pane.sessionID] = text
-                    }
-                }
-            }
-        }
-        return out
     }
 
     /// On launch, reap orphaned zmx sessions Seshterm created — UUID-named
