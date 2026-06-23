@@ -61,8 +61,47 @@ struct ZmxService {
     /// Inject `text` into the session's terminal display (`zmx print`), preserving
     /// ANSI/color. Used to replay saved scrollback into a fresh post-reboot
     /// session. Raw bytes, not pty input — doesn't run anything.
+    ///
+    /// The daemon forwards each print as a single `.Output` IPC message, and a
+    /// client's socket read buffer is 4096 bytes (zmx `ipc.zig`); a message
+    /// larger than that isn't reassembled across reads and never renders in the
+    /// attached client. So split into sub-4KB chunks on line boundaries — each
+    /// renders, and together they replay the whole scrollback.
     func print(sessionID: String, text: String) {
-        _ = run(["print", sessionID, text])
+        for chunk in Self.chunkOnLines(text, maxBytes: 3000) {
+            _ = run(["print", sessionID, chunk])
+        }
+    }
+
+    /// Split `text` into pieces of at most ~`maxBytes`, breaking only at line
+    /// boundaries so an SGR/escape sequence (always within a line) is never cut.
+    /// A single line longer than `maxBytes` is sent whole (rare). Pure/testable.
+    static func chunkOnLines(_ text: String, maxBytes: Int) -> [String] {
+        guard text.utf8.count > maxBytes else { return text.isEmpty ? [] : [text] }
+        var chunks: [String] = []
+        var current = ""
+        func add(_ line: Substring) {
+            if !current.isEmpty, current.utf8.count + line.utf8.count > maxBytes {
+                chunks.append(current)
+                current = ""
+            }
+            current += line
+        }
+        // Cut at real newline positions, keeping the `\n` attached to its line,
+        // so concatenating the chunks reproduces `text` exactly.
+        var lineStart = text.startIndex
+        var i = text.startIndex
+        while i < text.endIndex {
+            if text[i] == "\n" {
+                let next = text.index(after: i)
+                add(text[lineStart ..< next])
+                lineStart = next
+            }
+            i = text.index(after: i)
+        }
+        if lineStart < text.endIndex { add(text[lineStart...]) }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
     }
 
     /// Send raw input to the session's pty (`zmx send`), as if typed. Used to

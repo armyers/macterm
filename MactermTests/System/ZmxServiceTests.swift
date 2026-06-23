@@ -126,6 +126,23 @@ struct ZmxServiceTests {
     }
 
     @Test
+    func chunk_on_lines_splits_under_limit_at_line_boundaries() {
+        // 20 lines of 100 bytes each (~2020 B) capped at 600 B → multiple chunks.
+        let text = (0 ..< 20).map { _ in String(repeating: "x", count: 99) }.joined(separator: "\n") + "\n"
+        let chunks = ZmxService.chunkOnLines(text, maxBytes: 600)
+        #expect(chunks.count > 1)
+        #expect(chunks.allSatisfy { $0.utf8.count <= 600 || !$0.contains("\n") }) // only an oversize single line may exceed
+        #expect(chunks.joined() == text) // lossless
+        #expect(chunks.allSatisfy { $0.hasSuffix("\n") }) // broken only at line ends
+    }
+
+    @Test
+    func chunk_on_lines_keeps_small_text_in_one_chunk() {
+        let text = "a\nb\nc\n"
+        #expect(ZmxService.chunkOnLines(text, maxBytes: 3000) == [text])
+    }
+
+    @Test
     func trailing_cmd_field_does_not_pollute_start_dir() {
         // Sessions started with a command carry a trailing `cmd=…` after
         // `start_dir=…`; splitting on TAB keeps start_dir clean.
