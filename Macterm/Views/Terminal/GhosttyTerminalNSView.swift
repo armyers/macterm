@@ -571,6 +571,37 @@ final class GhosttyTerminalNSView: NSView {
         return NSPoint(x: local.x, y: bounds.height - local.y)
     }
 
+    /// Warp the OS mouse cursor to this pane's center so cursor-routed events
+    /// (the scroll wheel in particular) target this pane. Called when the
+    /// active split changes: macOS leaves the cursor wherever it was, which for
+    /// evenly-split panes is often the divider, over no pane at all. This is
+    /// the pane-level analog of AeroSpace's `window-force-center` for windows.
+    ///
+    /// Lazy: if the cursor is already inside this pane (e.g. you just clicked
+    /// here), it's left alone. The inset makes a cursor sitting exactly on a
+    /// shared pane edge count as "outside", so the divider case still warps.
+    func warpCursorToActivePaneCenter() {
+        guard Preferences.shared.warpCursorToActivePaneEnabled else { return }
+        guard let window, window.isVisible, bounds.width > 0, bounds.height > 0 else { return }
+
+        let frameOnScreen = window.convertToScreen(convert(bounds, to: nil))
+        if NSMouseInRect(NSEvent.mouseLocation, frameOnScreen.insetBy(dx: 4, dy: 4), false) {
+            return
+        }
+
+        let centerInWindow = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil)
+        let centerOnScreen = window.convertPoint(toScreen: centerInWindow)
+
+        // CGWarpMouseCursorPosition takes top-left-origin global coordinates;
+        // flip Y against the PRIMARY display height (NSScreen.screens[0]).
+        guard let primary = NSScreen.screens.first else { return }
+        let target = CGPoint(x: centerOnScreen.x, y: primary.frame.height - centerOnScreen.y)
+        CGWarpMouseCursorPosition(target)
+        // The warp briefly decouples cursor motion from the device; re-associate
+        // immediately so the next physical mouse move isn't swallowed.
+        CGAssociateMouseAndMouseCursorPosition(boolean_t(1))
+    }
+
     override func mouseDown(with event: NSEvent) {
         onInteraction?()
         guard let surface else { return }

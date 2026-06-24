@@ -277,6 +277,8 @@ private struct AppearanceSettings: View {
     private var paneHighlightBorderEnabled = true
     @AppStorage(Preferences.Keys.inactivePaneDimming)
     private var inactivePaneDimming = 0.45
+    @AppStorage(Preferences.Keys.warpCursorToActivePaneEnabled)
+    private var warpCursorToActivePaneEnabled = true
     @State
     private var backgroundOpacity: Double = Preferences.shared.windowOpacity
     @State
@@ -350,6 +352,15 @@ private struct AppearanceSettings: View {
                 .onChange(of: inactivePaneDimming) { _, v in
                     Preferences.shared.inactivePaneDimming = v
                 }
+
+                Toggle("Move cursor to the active pane", isOn: $warpCursorToActivePaneEnabled)
+                    .onChange(of: warpCursorToActivePaneEnabled) { _, v in
+                        Preferences.shared.warpCursorToActivePaneEnabled = v
+                    }
+                Text("Warps the mouse onto the focused pane so it can be scrolled "
+                    + "without moving the mouse (macOS scrolls the pane under the cursor).")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section("Sidebar") {

@@ -341,6 +341,18 @@ private struct WindowStyler: NSViewRepresentable {
         func windowDidBecomeKey(_ notification: Notification) {
             if let window = notification.object as? NSWindow {
                 WindowAppearance.syncKeyStatus(window: window)
+                // On an app/workspace switch, AeroSpace force-centers the cursor
+                // on the whole window - which for evenly-split panes is the
+                // divider, over no pane. Re-center onto the active pane (the
+                // first responder) so scroll has a target. Delayed so it runs
+                // after AeroSpace's own move-mouse, which would otherwise win.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    MainActor.assumeIsolated {
+                        if let surface = window.firstResponder as? GhosttyTerminalNSView {
+                            surface.warpCursorToActivePaneCenter()
+                        }
+                    }
+                }
             }
             swiftuiDelegate?.windowDidBecomeKey?(notification)
         }

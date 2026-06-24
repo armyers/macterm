@@ -109,6 +109,10 @@ private struct TerminalSurface: NSViewRepresentable {
         if focused, !wasFocused {
             view.notifySurfaceFocused()
             FocusRestoration.restoreFocus(to: pane.id, finder: { [pane] in pane }, in: view.window)
+            // Move the cursor onto the newly-active pane so scroll lands here
+            // (macOS routes wheel events to whatever pane is under the cursor).
+            // Deferred so layout settles after a tab switch / split reshape.
+            DispatchQueue.main.async { view.warpCursorToActivePaneCenter() }
         } else if !focused, wasFocused {
             view.notifySurfaceUnfocused()
         }

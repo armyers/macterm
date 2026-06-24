@@ -123,6 +123,14 @@ final class Preferences {
         didSet { defaults.set(inactivePaneDimming, forKey: Keys.inactivePaneDimming) }
     }
 
+    /// Warp the mouse cursor to the center of the newly-active pane when pane
+    /// focus changes. macOS routes scroll-wheel events to the pane under the
+    /// cursor, so without this an evenly-split layout won't scroll the focused
+    /// pane until the mouse is moved onto it. On by default.
+    var warpCursorToActivePaneEnabled: Bool {
+        didSet { defaults.set(warpCursorToActivePaneEnabled, forKey: Keys.warpCursorToActivePaneEnabled) }
+    }
+
     // MARK: - Sidebar icons
 
     var projectIconSymbol: String {
@@ -333,6 +341,7 @@ final class Preferences {
         zmxPathOverride = defaults.string(forKey: Keys.zmxPathOverride) ?? ""
         paneHighlightBorderEnabled = defaults.object(forKey: Keys.paneHighlightBorderEnabled) as? Bool ?? true
         inactivePaneDimming = min(0.9, max(0, (defaults.object(forKey: Keys.inactivePaneDimming) as? Double) ?? 0.45))
+        warpCursorToActivePaneEnabled = defaults.object(forKey: Keys.warpCursorToActivePaneEnabled) as? Bool ?? true
         windowOpacity = (defaults.object(forKey: Keys.windowOpacity) as? Double) ?? 1.0
         windowBlurRadius = defaults.integer(forKey: Keys.windowBlurRadius)
         windowGlassEnabled = defaults.object(forKey: Keys.windowGlassEnabled) as? Bool ?? false
@@ -386,6 +395,7 @@ final class Preferences {
         static let zmxPathOverride = "macterm.zmx.pathOverride"
         static let paneHighlightBorderEnabled = "macterm.pane.highlightBorderEnabled"
         static let inactivePaneDimming = "macterm.pane.inactiveDimming"
+        static let warpCursorToActivePaneEnabled = "macterm.pane.warpCursorToActivePane"
         static let windowOpacity = "macterm.window.opacity"
         static let windowBlurRadius = "macterm.window.blurRadius"
         static let windowGlassEnabled = "macterm.window.glassEnabled"
