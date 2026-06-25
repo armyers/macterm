@@ -67,6 +67,7 @@ struct MainWindow: View {
         }
         .task {
             guard !appState.hasRestoredSelection else { return }
+            LayoutLibrary.standard.seedBuiltInsIfNeeded()
             appState.restoreSelection(projects: projectStore.projects)
         }
         .onChange(of: appState.sidebarVisible) { _, visible in
