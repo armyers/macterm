@@ -401,10 +401,25 @@ final class AppState {
     /// prompts. A restored snapshot already populates `workspaces`, so it takes
     /// precedence; if there's no layout file this no-ops and `ensureWorkspace`
     /// creates the default single-pane workspace.
+    /// A layout template chosen in the context picker when creating a new
+    /// context, consumed once by `autoApplyLayoutOnFirstOpen`. Transient.
+    @ObservationIgnored
+    private var pendingContextLayoutTemplate: LayoutFile?
+
     private func autoApplyLayoutOnFirstOpen(_ project: Project) {
-        guard workspaces[project.id] == nil,
-              LayoutFile.exists(atProjectRoot: project.path)
-        else { return }
+        guard workspaces[project.id] == nil else { return }
+        // A template picked at context creation wins over any committed file:
+        // instantiate it straight into the fresh project (workspace nil → the
+        // reconciler is pure-spawn, never destructive, so no confirmation).
+        if let template = pendingContextLayoutTemplate {
+            pendingContextLayoutTemplate = nil
+            let plan = LayoutReconciler.plan(
+                layout: template, workspace: nil, projectRoot: project.path, projectID: project.id
+            )
+            executeLayoutPlan(plan, projectID: project.id)
+            return
+        }
+        guard LayoutFile.exists(atProjectRoot: project.path) else { return }
         applyLayout(projectID: project.id, projectName: project.name, projectRoot: project.path)
     }
 
@@ -433,11 +448,12 @@ final class AppState {
     /// its name is decoupled from any single folder. No folder picker (Finder);
     /// the directory comes from the in-app fuzzy picker (`DirectorySearch`).
     /// No-op for a blank name. Selects the new context.
-    func createContext(named name: String, atPath path: String, store: ProjectStore) {
+    func createContext(named name: String, atPath path: String, store: ProjectStore, layout: LayoutFile? = nil) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         let project = Project(name: trimmed, path: path, sortOrder: store.projects.count)
         store.add(project)
+        pendingContextLayoutTemplate = layout
         selectProject(project)
     }
 
