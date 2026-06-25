@@ -839,6 +839,23 @@ final class AppState {
         }
     }
 
+    /// Save the active workspace to the layout library as a reusable, named
+    /// template (chosen later when creating a new context). Same serialization
+    /// as `saveLayout`, but written to the global library instead of the
+    /// project's `.macterm/layout.yaml`.
+    func saveWorkspaceAsLayout(name: String, projectID: UUID, projectName: String, projectRoot: String) -> Error? {
+        logger.info("saveWorkspaceAsLayout: \(name, privacy: .public)")
+        guard let ws = workspaces[projectID] else { return LayoutLibraryError.noActiveWorkspace }
+        let file = LayoutSerializer.layout(for: ws, projectName: projectName, projectRoot: projectRoot)
+        do {
+            try LayoutLibrary.standard.save(name: name, file: file)
+            return nil
+        } catch {
+            logger.error("saveWorkspaceAsLayout failed: \(error, privacy: .public)")
+            return error
+        }
+    }
+
     /// Swap each tab's tree to the reconciled shape, reusing the live `Pane`
     /// objects the plan kept (surfaces preserved) and destroying the rest.
     private func executeLayoutPlan(_ plan: LayoutReconciler.Plan, projectID: UUID) {

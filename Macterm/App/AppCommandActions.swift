@@ -140,6 +140,16 @@ extension AppCommand {
                     presentLayoutError(error, verb: "save")
                 }
             }
+        case .saveLayoutAs:
+            guard let projectID, let current else { return nil }
+            return {
+                guard let name = LayoutNamePrompt.run(defaultName: current.name) else { return }
+                if let error = ctx.appState.saveWorkspaceAsLayout(
+                    name: name, projectID: projectID, projectName: current.name, projectRoot: current.path
+                ) {
+                    presentLayoutError(error, verb: "save")
+                }
+            }
         case .nextProject:
             return { ctx.appState.selectNextProject(projects: ctx.projectStore.projects) }
         case .previousProject:
