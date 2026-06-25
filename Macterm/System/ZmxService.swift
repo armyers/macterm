@@ -49,6 +49,13 @@ struct ZmxService {
         return Self.parseList(output)
     }
 
+    /// The daemon's login-shell pid for a healthy session, or nil. Used to read
+    /// the session's live cwd from the kernel — the surface's own foreground pid
+    /// is just the `zmx attach` client.
+    func sessionPID(forSessionID id: String) -> pid_t? {
+        list().first { $0.name == id && $0.isHealthy }?.pid
+    }
+
     /// The session's scrollback as ANSI (`zmx history <id> --vt`), capped to
     /// roughly the last `maxBytes` so the saved file stays bounded. Headroom over
     /// the replay cap (`SessionResurrect.cappedForReplay`) so capture isn't the

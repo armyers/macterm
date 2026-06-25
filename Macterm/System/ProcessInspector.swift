@@ -153,6 +153,19 @@ enum ProcessInspector {
     /// program's cwd (typically launched from, and matching, the shell's).
     @MainActor
     static func foregroundWorkingDirectory(forPane pane: Pane) -> String? {
+        // zmx-backed pane: the surface's foreground process is the `zmx attach`
+        // client, whose cwd is the static dir the session was launched in — not
+        // the live in-session shell, which runs under the zmx daemon. Resolve
+        // the session's login-shell pid and read ITS cwd, so a `cd` inside the
+        // session is inherited on split even without OSC 7 shell integration.
+        if !pane.ephemeral,
+           Preferences.shared.sessionPersistenceEnabled,
+           ZmxService.standard.isAvailable,
+           let sessionPID = ZmxService.standard.sessionPID(forSessionID: pane.sessionID),
+           let cwd = workingDirectory(pid: sessionPID)
+        {
+            return cwd
+        }
         guard let pid = pane.nsView?.foregroundPID else { return nil }
         return workingDirectory(pid: pid)
     }
