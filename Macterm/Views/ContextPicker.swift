@@ -63,6 +63,7 @@ struct ContextPickerPanel: View {
     private enum Mode: Equatable {
         case search
         case pickDirectory(name: String)
+        case pickLayout(name: String, path: String)
     }
 
     @State
@@ -82,6 +83,13 @@ struct ContextPickerPanel: View {
     /// asynchronously off the main thread. Empty when nothing matches.
     @State
     private var dirResults: [String] = []
+    /// Templates offered in the `.pickLayout` phase, snapshotted from the library
+    /// when the phase is entered (so the list isn't re-read from disk per render).
+    @State
+    private var layoutTemplates: [LayoutTemplate] = []
+    /// The layout phase's own filter query.
+    @State
+    private var layoutQuery = ""
     @FocusState
     private var isFieldFocused: Bool
 
@@ -92,12 +100,42 @@ struct ContextPickerPanel: View {
         case project(Project)
         case directory(String)
         case create(String)
+        case layout(LayoutChoiceRow)
 
         var id: String {
             switch self {
             case let .project(project): "project:\(project.id.uuidString)"
             case let .directory(path): "dir:\(path)"
             case let .create(name): "create:\(name)"
+            case let .layout(choice): "layout:\(choice.id)"
+            }
+        }
+    }
+
+    /// A choice in the `.pickLayout` phase: the default single pane, or a saved
+    /// template. `file` nil → default (no layout applied).
+    fileprivate enum LayoutChoiceRow: Identifiable {
+        case defaultLayout
+        case template(LayoutTemplate)
+
+        var id: String {
+            switch self {
+            case .defaultLayout: "__default__"
+            case let .template(t): "tmpl:\(t.name)"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .defaultLayout: "Default (single pane)"
+            case let .template(t): t.name
+            }
+        }
+
+        var file: LayoutFile? {
+            switch self {
+            case .defaultLayout: nil
+            case let .template(t): t.file
             }
         }
     }
@@ -107,6 +145,7 @@ struct ContextPickerPanel: View {
         switch mode {
         case .search: appState.contextPickerQuery
         case .pickDirectory: dirQuery
+        case .pickLayout: layoutQuery
         }
     }
 
@@ -116,6 +155,7 @@ struct ContextPickerPanel: View {
         switch mode {
         case .search: "search:\(appState.contextPickerQuery)"
         case let .pickDirectory(name): "dir:\(name):\(dirQuery)"
+        case let .pickLayout(name, _): "layout:\(name):\(layoutQuery)"
         }
     }
 
@@ -125,6 +165,8 @@ struct ContextPickerPanel: View {
             Binding(get: { appState.contextPickerQuery }, set: { appState.contextPickerQuery = $0 })
         case .pickDirectory:
             $dirQuery
+        case .pickLayout:
+            $layoutQuery
         }
     }
 
@@ -132,6 +174,7 @@ struct ContextPickerPanel: View {
         switch mode {
         case .search: "Open or create a context…"
         case let .pickDirectory(name): "Folder for “\(name)” — type to search…"
+        case let .pickLayout(name, _): "Layout for “\(name)” — type to filter…"
         }
     }
 
@@ -139,6 +182,7 @@ struct ContextPickerPanel: View {
         switch mode {
         case .search: "magnifyingglass"
         case .pickDirectory: "folder.badge.plus"
+        case .pickLayout: "rectangle.split.2x1"
         }
     }
 
@@ -178,6 +222,14 @@ struct ContextPickerPanel: View {
             return rows
         case .pickDirectory:
             return directoryMatches().map(Row.directory)
+        case .pickLayout:
+            // Default single pane first, then the saved templates, filtered by
+            // the typed query (Default matches an empty query and "default").
+            var choices: [LayoutChoiceRow] = [.defaultLayout]
+            choices += layoutTemplates.map(LayoutChoiceRow.template)
+            let q = layoutQuery.trimmingCharacters(in: .whitespaces)
+            let filtered = q.isEmpty ? choices : choices.filter { $0.title.localizedCaseInsensitiveContains(q) }
+            return filtered.map(Row.layout)
         }
     }
 
@@ -305,6 +357,9 @@ struct ContextPickerPanel: View {
             dirResults = []
             selectedIndex = 0
             DispatchQueue.main.async { isFieldFocused = true }
+        case let .pickLayout(name, _):
+            // Back up to re-pick the folder for this context.
+            enterDirectoryPick(name: name)
         }
         return .handled
     }
@@ -321,13 +376,26 @@ struct ContextPickerPanel: View {
             // directory phase uses the task name the user already typed.
             let name = switch mode {
             case let .pickDirectory(taskName): taskName
-            case .search: (path as NSString).lastPathComponent
+            default: (path as NSString).lastPathComponent
             }
-            close()
-            DispatchQueue.main.async { appState.createContext(named: name, atPath: path, store: projectStore) }
+            // Offer a layout choice when the library has templates; otherwise
+            // create straight away with the default single pane (no friction).
+            let templates = LayoutLibrary.standard.list()
+            if templates.isEmpty {
+                close()
+                DispatchQueue.main.async { appState.createContext(named: name, atPath: path, store: projectStore) }
+            } else {
+                enterLayoutPick(name: name, path: path, templates: templates)
+            }
         case let .create(name):
             // Advance to the in-app directory picker instead of Finder.
             enterDirectoryPick(name: name)
+        case let .layout(choice):
+            guard case let .pickLayout(name, path) = mode else { return }
+            close()
+            DispatchQueue.main.async {
+                appState.createContext(named: name, atPath: path, store: projectStore, layout: choice.file)
+            }
         }
     }
 
@@ -338,6 +406,15 @@ struct ContextPickerPanel: View {
         mode = .pickDirectory(name: trimmed)
         dirQuery = ""
         dirResults = []
+        selectedIndex = 0
+        DispatchQueue.main.async { isFieldFocused = true }
+    }
+
+    /// Switch to the layout-pick phase, snapshotting the available templates.
+    private func enterLayoutPick(name: String, path: String, templates: [LayoutTemplate]) {
+        layoutTemplates = templates
+        layoutQuery = ""
+        mode = .pickLayout(name: name, path: path)
         selectedIndex = 0
         DispatchQueue.main.async { isFieldFocused = true }
     }
@@ -373,6 +450,13 @@ private extension ContextPickerPanel.Row {
                 systemImage: "plus.circle",
                 title: "Create context “\(name)”",
                 subtitle: "Pick a folder…",
+                isSelected: isSelected
+            )
+        case let .layout(choice):
+            ContextPickerRow(
+                systemImage: choice.file == nil ? "rectangle" : "rectangle.split.2x1",
+                title: choice.title,
+                subtitle: choice.file == nil ? "One pane at the project root" : "Saved layout",
                 isSelected: isSelected
             )
         }
