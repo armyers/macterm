@@ -131,6 +131,11 @@ final class Preferences {
         didSet { defaults.set(warpCursorToActivePaneEnabled, forKey: Keys.warpCursorToActivePaneEnabled) }
     }
 
+    /// Multiplier applied to terminal scroll wheel / trackpad row deltas.
+    var terminalScrollSpeed: Double {
+        didSet { defaults.set(terminalScrollSpeed, forKey: Keys.terminalScrollSpeed) }
+    }
+
     // MARK: - Sidebar icons
 
     var projectIconSymbol: String {
@@ -342,6 +347,7 @@ final class Preferences {
         paneHighlightBorderEnabled = defaults.object(forKey: Keys.paneHighlightBorderEnabled) as? Bool ?? true
         inactivePaneDimming = min(0.9, max(0, (defaults.object(forKey: Keys.inactivePaneDimming) as? Double) ?? 0.45))
         warpCursorToActivePaneEnabled = defaults.object(forKey: Keys.warpCursorToActivePaneEnabled) as? Bool ?? true
+        terminalScrollSpeed = Self.clampScrollSpeed(defaults.double(forKey: Keys.terminalScrollSpeed), fallback: 1.0)
         windowOpacity = (defaults.object(forKey: Keys.windowOpacity) as? Double) ?? 1.0
         windowBlurRadius = defaults.integer(forKey: Keys.windowBlurRadius)
         windowGlassEnabled = defaults.object(forKey: Keys.windowGlassEnabled) as? Bool ?? false
@@ -367,6 +373,11 @@ final class Preferences {
     private static func clampFraction(_ v: Double, fallback: Double) -> Double {
         guard v > 0 else { return fallback }
         return max(0.2, min(1.0, v))
+    }
+
+    private static func clampScrollSpeed(_ v: Double, fallback: Double) -> Double {
+        guard v > 0 else { return fallback }
+        return max(0.25, min(3.0, v))
     }
 
     /// Pre-v2 builds stored theme/font/option-as-alt in UserDefaults. Those
@@ -396,6 +407,7 @@ final class Preferences {
         static let paneHighlightBorderEnabled = "macterm.pane.highlightBorderEnabled"
         static let inactivePaneDimming = "macterm.pane.inactiveDimming"
         static let warpCursorToActivePaneEnabled = "macterm.pane.warpCursorToActivePane"
+        static let terminalScrollSpeed = "macterm.terminal.scrollSpeed"
         static let windowOpacity = "macterm.window.opacity"
         static let windowBlurRadius = "macterm.window.blurRadius"
         static let windowGlassEnabled = "macterm.window.glassEnabled"
