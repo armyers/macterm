@@ -27,8 +27,7 @@ Everything Macterm does (see [below](#from-macterm-the-base)), plus:
 - **Recent toggles** — bounce between your last two contexts (<kbd>⌘⇧O</kbd>) or the last two panes (<kbd>⌘⌃O</kbd>), vim `ctrl-^` style.
 - **Layout templates** — save the current workspace as a reusable, named layout and pick one when you create a context; ships with built-in starters.
 - **Move cursor to the active pane** on focus change, so scroll-under-cursor just works.
-- **Pane accents** — an optional accent border on the focused pane and dimming for the inactive ones.
-- **Eager tab start** — opening a project starts every tab's processes, not just the active tab's.
+- **Active-pane accent border** — an optional accent outline around the focused pane in a split (base Macterm already handles dimming the inactive ones).
 
 ## From Macterm (the base)
 
@@ -36,6 +35,8 @@ Everything Macterm does (see [below](#from-macterm-the-base)), plus:
 - **Remote projects** — open a directory on another machine over SSH. Each pane is a persistent session _on the host_, so your shells survive quits, dropped connections, and even a local reboot.
 - **Vertical project sidebar** — organize projects and their tabs in a native macOS sidebar.
 - **Inherit cwd on split** — splitting a pane opens the new one in the source pane's current directory, including reattached zmx-backed panes.
+- **Eager tab start** — opening a project starts every tab's processes, not just the active tab's.
+- **Unfocused-pane dimming** — dim inactive split panes by a configurable amount so the active one stands out.
 - **Command palette** — press <kbd>⌘P</kbd> to split panes, switch projects, or open a directory; every row shows its keybind.
 - **Declarative layouts** — describe a project's tabs, splits, and per-pane commands in YAML; the app builds the workspace from it on open.
 - **Control CLI** — a bundled `macterm` command drives the running app over a local socket, so scripts and AI agents can spawn panes, run commands, and script layouts.
