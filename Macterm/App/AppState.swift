@@ -60,31 +60,60 @@ final class AppState {
         let projectID: UUID
     }
 
-    /// A reconcile plan staged for confirmation — because applying it would
-    /// close panes / end their processes, and/or the file names a different
-    /// project than the active one.
+    /// A tab close staged for confirmation because one of its panes has a
+    /// running foreground program (closing kills the pane's zmx session — the
+    /// destructive act now that quit detaches).
+    struct PendingCloseTab: Equatable {
+        let tabID: UUID
+        let projectID: UUID
+    }
+
+    var pendingCloseTab: PendingCloseTab?
+
+    /// A project removal staged for confirmation, same busy rule as tabs.
+    /// Carries the full removal (AppState workspace + ProjectStore entry) as
+    /// a closure, since the store lives with the caller.
+    struct PendingRemoveProject {
+        let projectID: UUID
+        let completeRemoval: () -> Void
+    }
+
+    var pendingRemoveProject: PendingRemoveProject?
+
+    /// A reconcile plan staged for confirmation because applying it would
+    /// close panes / end their processes. (There's no name-mismatch prompt
+    /// anymore: central project files are matched by *path*, so a differing
+    /// `name:` only means the project was renamed since the last save —
+    /// expected drift, not a wrong-file hazard.)
     struct PendingLayoutApply {
         let projectID: UUID
         let plan: LayoutReconciler.Plan
-        /// The project name the file was saved for, when it differs from the
-        /// active project; nil when names match (or the file omits one).
-        let mismatchedProjectName: String?
-        /// The active project's name, for the mismatch message.
-        let currentProjectName: String
 
-        /// The confirmation dialog body, combining the reasons this apply needs
-        /// confirming (project-name mismatch and/or pane destruction).
         var confirmationMessage: String {
-            var parts: [String] = []
-            if let saved = mismatchedProjectName {
-                parts.append("This layout was saved for “\(saved)”, but you're applying it to “\(currentProjectName)”.")
-            }
-            if plan.isDestructive {
-                parts.append("Applying it will close some panes and end the processes running in them.")
-            }
-            return parts.joined(separator: "\n\n")
+            "Applying this layout will close some panes and end the processes running in them."
         }
     }
+
+    /// A layout apply/save/import notice awaiting presentation (alert in
+    /// `MactermApp`). Fed by the explicit palette/menu commands and by the
+    /// silent first-open auto-apply — an invalid project file must always
+    /// surface a dialog, never fail silently.
+    struct LayoutError: Identifiable {
+        let id = UUID()
+        /// "apply" / "save" / "import" — slotted into the default alert title.
+        let verb: String
+        let message: String
+        /// Title override for notices that aren't failures (e.g. a save that
+        /// landed but is shadowed by a duplicate file).
+        var customTitle: String?
+        var title: String { customTitle ?? "Couldn't \(verb) layout" }
+    }
+
+    var pendingLayoutError: LayoutError?
+
+    /// Presents the "New Remote Project" sheet (#104) — set by the palette
+    /// command and the sidebar's New Project menu, consumed by `MainWindow`.
+    var isNewRemoteProjectSheetPresented = false
 
     // Tab cycling state (Ctrl+Tab)
     private var tabCycleOrder: [UUID] = []
@@ -94,59 +123,283 @@ final class AppState {
     private let workspaceStore: WorkspaceStore
     private var autoTileObserver: Any?
 
-    /// Periodically re-reads each pane's foreground process so tab names track
-    /// the running command (`hx`, `btop`, …). This polls like tmux's
-    /// `automatic-rename`, rather than relying on terminal title escapes: with
-    /// shell integration (Starship/ghostty) the OSC title is prompt/cwd churn,
-    /// not the command, and a program may never emit a usable title at all (a
-    /// layout-spawned or eager-warmed pane, a process that sets no title). A
-    /// poll catches every case — manual launches, layout restores, quits —
-    /// within one interval, regardless of titles.
+    /// Re-reads each pane's foreground process so tab names track the running
+    /// command (`hx`, `btop`, …). This polls like tmux's `automatic-rename`,
+    /// rather than relying on terminal title escapes: with shell integration
+    /// (Starship/ghostty) the OSC title is prompt/cwd churn, not the command,
+    /// and a program may never emit a usable title at all (a layout-spawned or
+    /// eager-warmed pane, a process that sets no title). A poll catches every
+    /// case — manual launches, layout restores, quits — within one interval,
+    /// regardless of titles.
     ///
-    /// The interval (250ms) is a responsiveness choice, not a cost one: it's a
-    /// run-loop timer (the thread parks between ticks, no busy-loop), and each
-    /// tick is one `proc_pidinfo` per pane — ~0.24µs/call, so even 20 panes
-    /// 4×/sec is ~0.002% of a core. A pane only republishes (→ re-render) when
-    /// its name actually changes, so idle panes are free.
+    /// The cadence is adaptive (`PollCadence`): 250ms only while something is
+    /// moving (recent tab switch / keystroke / OSC title / execution
+    /// transition, or a running command with the app frontmost), 1s when the
+    /// app is active but idle, 2s when inactive with a window still visible,
+    /// and fully stopped when nothing is on screen. Each interesting moment
+    /// fires `notePollEvent()`, which resumes instantly — so title liveness is
+    /// event-bounded, not interval-bounded, and an idle app costs nothing.
     @ObservationIgnored
-    private var processNameTimer: Timer?
+    private var pollTimer: Timer?
+    /// The delay `pollTimer` was scheduled with, so `reschedulePoll` can skip
+    /// tearing down and rebuilding an identical timer — `.terminalPollEvent`
+    /// fires often under a busy workload (every keystroke, output transition,
+    /// OSC title), and each fire recomputed the same cadence and churned a new
+    /// `Timer` + RunLoop registration for no behavior change.
+    @ObservationIgnored
+    private var pollTimerDelay: TimeInterval?
 
-    /// Periodic capture of zmx-backed panes' color scrollback (for post-reboot
-    /// resurrect), plus a workspace save. Fires ~every 15s — far slower than the
-    /// process poll, since it shells out to `zmx history` per pane.
+    /// Periodic capture of zmx-backed panes' color scrollback + restartable
+    /// command for post-reboot resurrect, plus a workspace save. Fires ~every
+    /// 15s — far slower than the process poll, since it drives `zmx history`
+    /// per pane. Created once at launch, independent of the poll cadence (which
+    /// pauses when nothing is on screen), so background state keeps being saved.
     @ObservationIgnored
     private var resurrectTimer: Timer?
 
-    /// sessionID → restartable foreground command, refreshed off-main by
+    /// sessionName → restartable foreground command, refreshed off-main by
     /// `captureResurrectState`. `saveWorkspaces` reads this cache so a snapshot
     /// never has to spawn a zmx subprocess on the (main) save path.
     @ObservationIgnored
     private var capturedResurrectCommands: [String: String] = [:]
 
-    init(workspaceStore: WorkspaceStore = WorkspaceStore()) {
+    @ObservationIgnored
+    private var pollCadence = PollCadence()
+
+    /// Whether the previous tick saw any `.running` pane; feeds
+    /// `PollCadence.Context.isAnyPaneBusy` so a running command holds the
+    /// fast cadence while the app is frontmost.
+    @ObservationIgnored
+    private var lastPollSawBusyPane = false
+
+    @ObservationIgnored
+    private var pollEventObservers: [Any] = []
+
+    /// Every block-based observer token paired with the center it was added to,
+    /// so `deinit` can remove them from the correct center. `nonisolated(unsafe)`
+    /// so the nonisolated deinit can read it — the object is being destroyed, so
+    /// there is no concurrent access. Tokens are `NSObjectProtocol` (what
+    /// `addObserver(forName:…)` returns).
+    nonisolated(unsafe) private var observerTokens: [(center: NotificationCenter, token: NSObjectProtocol)] = []
+
+    /// Injectable for tests (`PollCadence.Context` inputs). `NSApp` is nil
+    /// while the SwiftUI `App` struct (and thus AppState) is constructed —
+    /// before `NSApplicationMain` — so both closures must not force-unwrap:
+    /// "no app yet" reads as inactive/invisible, which parks the poll until
+    /// the first activation/occlusion event fires.
+    @ObservationIgnored
+    var isAppActive: () -> Bool = { NSApp?.isActive ?? false }
+
+    /// Any on-screen window counts — including the quick terminal's
+    /// non-activating panel. The surface incubator's window is ordered out and
+    /// never becomes visible, so it never keeps polling alive.
+    @ObservationIgnored
+    var isAnyWindowVisible: () -> Bool = {
+        (NSApp?.windows ?? []).contains { $0.isVisible && $0.occlusionState.contains(.visible) }
+    }
+
+    /// Whether a pane's surface is occluded — its renderer parked by
+    /// `ghostty_surface_set_occlusion`, so render/scrollbar heartbeats are
+    /// suppressed and silence says nothing about completion. Injectable for
+    /// tests. "No window" counts as occluded, which also covers panes
+    /// incubated off-screen (the incubator window is never visible).
+    @ObservationIgnored
+    var paneIsOccluded: (Pane) -> Bool = { pane in
+        !(pane.nsView?.window?.occlusionState.contains(.visible) ?? false)
+    }
+
+    /// Panes that were occluded on the previous poll tick, so the visible
+    /// transition can restart their quiet window before settling resumes.
+    @ObservationIgnored
+    private var previouslyOccludedPanes: Set<UUID> = []
+
+    /// zmx session-persistence client. Injectable so tests can observe
+    /// session kills without a real daemon.
+    @ObservationIgnored
+    var zmx: ZmxClient = .live
+
+    /// Refresh policy for `ZmxForegroundResolver`'s name→leader-pid cache:
+    /// refresh on session lifecycle events plus a 30s reconcile TTL — never
+    /// per tick (`zmx ls` is a fork/exec).
+    @ObservationIgnored
+    private var zmxRefreshGate = ZmxRefreshGate()
+
+    /// Tier-2 remote tab naming (#104): batched per-host ssh probes on their
+    /// own throttled cadence, decoupled from the local poll's 250ms bursts.
+    /// The probe closure is handed in per refresh so it always reads the
+    /// injectable `zmx` (tests swap `zmx` after init).
+    @ObservationIgnored
+    private let remoteForegroundResolver = RemoteForegroundResolver()
+
+    /// Drops overlapping `zmx ls` refreshes so a slow probe can't pile up
+    /// behind the poll.
+    @ObservationIgnored
+    private var zmxRefreshInFlight = false
+
+    /// Bounded retries while a *wrapped* pane is missing from `zmx ls`: a
+    /// freshly-spawned session registers asynchronously, so the refresh fired
+    /// by its creation event usually runs too early. Reset on every lifecycle
+    /// event; without the cap, a genuinely dead daemon would turn every poll
+    /// tick back into a fork/exec.
+    @ObservationIgnored
+    private var zmxRetryBudget = 8
+
+    /// Central project-file store (`~/.config/macterm/projects`). Injectable
+    /// so tests never read or write the user's real directory.
+    @ObservationIgnored
+    let projectFiles: ProjectFileStore
+
+    init(
+        workspaceStore: WorkspaceStore = WorkspaceStore(),
+        projectFiles: ProjectFileStore = ProjectFileStore()
+    ) {
         self.workspaceStore = workspaceStore
-        autoTileObserver = NotificationCenter.default.addObserver(
+        self.projectFiles = projectFiles
+        let autoTileToken = NotificationCenter.default.addObserver(
             forName: .autoTilingEnabledDidChange,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.rebalanceAllWorkspacesIfEnabled() }
         }
-        let restored = (UserDefaults.standard.stringArray(forKey: recencyKey) ?? [])
+        autoTileObserver = autoTileToken
+        observerTokens.append((NotificationCenter.default, autoTileToken))
+        let restored = (Preferences.defaults.stringArray(forKey: recencyKey) ?? [])
             .compactMap { UUID(uuidString: $0) }
         projectRecency = RecencyStack<UUID>(limit: 50, items: restored)
 
-        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshAllForegroundProcesses() }
+        let center = NotificationCenter.default
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        let onEvent: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated { self?.notePollEvent() }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        processNameTimer = timer
+        let tokens: [(NotificationCenter, NSObjectProtocol)] = [
+            (center, center.addObserver(forName: .terminalPollEvent, object: nil, queue: .main, using: onEvent)),
+            (center, center.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main, using: onEvent
+            )),
+            (center, center.addObserver(
+                forName: NSApplication.didResignActiveNotification, object: nil, queue: .main, using: onEvent
+            )),
+            (center, center.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main, using: onEvent
+            )),
+            // Wake is on NSWorkspace's own center, not the default one. A
+            // timer whose fire date passed during sleep also fires once on
+            // wake; `noteEvent` coalescing absorbs the double tick.
+            (workspaceCenter, workspaceCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: onEvent
+            )),
+            (center, center.addObserver(
+                forName: .zmxSessionsChanged, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.zmxRefreshGate.noteSessionLifecycle()
+                    self?.zmxRetryBudget = 8
+                    self?.notePollEvent()
+                }
+            }),
+        ]
+        pollEventObservers = tokens.map(\.1)
+        observerTokens.append(contentsOf: tokens.map { (center: $0.0, token: $0.1) })
+        pollNow()
+    }
 
-        let resurrect = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.captureResurrectState() }
+    deinit {
+        // Remove every block-based observer from the center each was added to.
+        // Production runs one app-lifetime instance, but tests build fresh
+        // AppStates — without this, their observers accumulate on the shared
+        // centers and dead instances' blocks keep firing into a nil weak self.
+        // Only nonisolated-safe calls here (observerTokens is nonisolated).
+        // The poll timer self-cleans: it's non-repeating with a `[weak self]`
+        // closure, so a dead instance's timer fires once into nil and stops.
+        for entry in observerTokens {
+            entry.center.removeObserver(entry.token)
         }
-        RunLoop.main.add(resurrect, forMode: .common)
-        resurrectTimer = resurrect
+    }
+
+    // MARK: - Poll scheduling
+
+    /// An instant-resume trigger for the poll (see `PollCadence.noteEvent`).
+    func notePollEvent() {
+        if pollCadence.noteEvent(at: Date()) {
+            pollNow()
+        } else {
+            // Coalesced — but the mode may still have shortened (idle → fast
+            // right after a tick), so re-arm at the new cadence.
+            reschedulePoll()
+        }
+    }
+
+    private func pollNow() {
+        // Before the work: the refresh publishes execution-state transitions
+        // that fire `notePollEvent`, and the fresh poll timestamp turns those
+        // into coalesced no-ops instead of recursive polls.
+        pollCadence.notePolled(at: Date())
+        refreshZmxCacheIfDue()
+        refreshAllForegroundProcesses()
+        reschedulePoll()
+    }
+
+    /// Refresh `ZmxForegroundResolver`'s name→leader-pid cache when the gate
+    /// says so (session lifecycle event, or the 30s reconcile TTL). Runs the
+    /// `zmx ls` subprocess off-main; per-tick foreground resolution reads the
+    /// cache with cheap syscalls only. Steady state: at most one fork/exec
+    /// every 30s, zero while polling is paused.
+    private func refreshZmxCacheIfDue() {
+        guard !zmxRefreshInFlight, zmx.isBundled() else { return }
+        guard zmxRefreshGate.shouldRefresh(now: Date()) else { return }
+        zmxRefreshInFlight = true
+        Task { [weak self, zmx] in
+            let map = await zmx.sessionLeaderPIDs()
+            ZmxForegroundResolver.updateCache(map)
+            await MainActor.run { self?.finishZmxRefresh(map: map) }
+        }
+    }
+
+    private func finishZmxRefresh(map: [String: pid_t]) {
+        zmxRefreshInFlight = false
+        // A wrapped pane absent from the listing means the refresh raced the
+        // session's async registration — retry on the next tick (bounded).
+        // Without this, the tab title reads `zmx` (the attach client) until
+        // the 30s reconcile catches up.
+        let missingWrapped = workspaces.values
+            .flatMap(\.tabs)
+            .flatMap { $0.splitRoot.allPanes() }
+            .contains { $0.nsView?.isZmxWrapped == true && map[$0.sessionName] == nil }
+        if missingWrapped, zmxRetryBudget > 0 {
+            zmxRetryBudget -= 1
+            zmxRefreshGate.noteSessionLifecycle()
+            notePollEvent()
+        }
+    }
+
+    private func reschedulePoll() {
+        let context = PollCadence.Context(
+            isAppActive: isAppActive(),
+            isAnyWindowVisible: isAnyWindowVisible(),
+            isAnyPaneBusy: lastPollSawBusyPane
+        )
+        guard let delay = pollCadence.nextDelay(at: Date(), context: context) else {
+            pollTimer?.invalidate()
+            pollTimer = nil
+            pollTimerDelay = nil
+            return
+        }
+        // A running timer with the same cadence needs no change — rebuilding it
+        // (invalidate + new Timer + RunLoop.add) on every `.terminalPollEvent`
+        // is pure churn under a busy workload. Only rebuild when the delay
+        // actually changed (or no timer is scheduled). The one-shot timer
+        // clears `pollTimer` when it fires, so a nil timer here always rebuilds.
+        if let existing = pollTimer, existing.isValid, pollTimerDelay == delay { return }
+        pollTimer?.invalidate()
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pollNow() }
+        }
+        timer.tolerance = delay * 0.1
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
+        pollTimerDelay = delay
     }
 
     /// Re-read the foreground process name of every live pane across all
@@ -159,13 +412,30 @@ final class AppState {
         // this feature.
         let trackExecution = Preferences.shared.showTabStatusIndicator
         var didAcknowledgeCompletion = false
+        var seenPanes: Set<UUID> = []
+        var sawBusyPane = false
+        var activeRemotePanes: [Pane] = []
         for (projectID, ws) in workspaces {
             for tab in ws.tabs {
                 for pane in tab.splitRoot.allPanes() {
-                    pane.refreshForegroundProcess(trackExecution: trackExecution)
-                    if trackExecution {
-                        pane.settleTerminalActivityIfQuiet()
+                    seenPanes.insert(pane.id)
+                    if pane.isRemote {
+                        // The local process table only knows `ssh` here — a
+                        // local refresh would stomp the probe-derived name
+                        // and instantly expire remote OSC titles. Execution
+                        // state still settles from output heartbeats, and
+                        // the frontmost project's panes feed the throttled
+                        // remote probe below.
+                        if projectID == activeProjectID {
+                            activeRemotePanes.append(pane)
+                        }
+                    } else {
+                        pane.refreshForegroundProcess(trackExecution: trackExecution)
                     }
+                    if trackExecution {
+                        settleIfVisible(pane)
+                    }
+                    if pane.executionState == .running { sawBusyPane = true }
                     didAcknowledgeCompletion = acknowledgeFinishedCommandIfActive(
                         paneID: pane.id,
                         projectID: projectID,
@@ -174,12 +444,37 @@ final class AppState {
                 }
             }
         }
+        previouslyOccludedPanes.formIntersection(seenPanes)
+        lastPollSawBusyPane = sawBusyPane
         if didAcknowledgeCompletion { saveWorkspaces() }
+        if !activeRemotePanes.isEmpty, isAnyWindowVisible() {
+            remoteForegroundResolver.refresh(panes: activeRemotePanes, probe: zmx.remoteForegroundComms)
+        }
+    }
+
+    /// Quiet-settle only while the surface actually renders: an occluded pane
+    /// emits no activity heartbeats (its renderer is parked), so settling it
+    /// would misread suppressed output as completion. On the occluded→visible
+    /// edge the quiet window restarts, giving a still-running program time to
+    /// deliver heartbeats again before the settle can fire.
+    ///
+    /// Not private so tests can drive the guard directly (`paneIsOccluded` is
+    /// injectable) without a live surface or mutating the `Preferences`
+    /// singleton the poll reads.
+    func settleIfVisible(_ pane: Pane) {
+        if paneIsOccluded(pane) {
+            previouslyOccludedPanes.insert(pane.id)
+            return
+        }
+        if previouslyOccludedPanes.remove(pane.id) != nil {
+            pane.refreshTerminalActivityWindow()
+        }
+        pane.settleTerminalActivityIfQuiet()
     }
 
     private func recordProjectVisit(_ projectID: UUID) {
         projectRecency.push(projectID)
-        UserDefaults.standard.set(projectRecency.items.map(\.uuidString), forKey: recencyKey)
+        Preferences.defaults.set(projectRecency.items.map(\.uuidString), forKey: recencyKey)
     }
 
     /// Recently-visited projects, filtered to only those still present in the store.
@@ -220,22 +515,14 @@ final class AppState {
         logger.info("restoreSelection: didReboot=\(SessionResurrect.didReboot, privacy: .public)")
         let snapshots = workspaceStore.load()
         let valid = Set(projects.map(\.id))
-        // A committed layout file is the source of truth: skip restoring the
-        // session snapshot for any project that has one, leaving its workspace
-        // nil so it rebuilds from `.macterm/layout.yaml` on open (below / on
-        // first select). Projects with no layout file restore their snapshot.
-        let pathByID = Dictionary(projects.map { ($0.id, $0.path) }, uniquingKeysWith: { a, _ in a })
-        func snapIDs(_ n: SplitNodeSnapshot) -> [String] {
-            switch n {
-            case let .pane(p): [p.sessionID ?? "nil"]
-            case let .split(b): snapIDs(b.first) + snapIDs(b.second)
-            }
-        }
-        let loadedIDs = snapshots.flatMap { $0.tabs.flatMap { snapIDs($0.splitRoot) } }
-        resurrectDebug("LOAD: projects=\(projects.count) snapshots=\(snapshots.count) loadedSessionIDs=\(loadedIDs)")
-        for ws in WorkspaceSerializer.restore(from: snapshots, validIDs: valid)
-            where !LayoutFile.exists(atProjectRoot: pathByID[ws.projectID] ?? "")
-        {
+        // Restore every project's snapshot — including layout-file projects.
+        // The snapshot carries each pane's persisted zmx session identity, so
+        // panes REATTACH their still-running shells; force-applying the
+        // committed `.macterm/layout.yaml` here would silently destroy them
+        // on every launch. The layout now only seeds a genuine first open
+        // (no snapshot) — `autoApplyLayoutOnFirstOpen` guards on
+        // `workspaces[id] == nil`, so a restored snapshot disables it.
+        for ws in WorkspaceSerializer.restore(from: snapshots, validIDs: valid) {
             workspaces[ws.projectID] = ws
         }
         let restoredIDs = workspaces.values.flatMap { $0.tabs.flatMap { $0.splitRoot.allPanes().map(\.sessionID) } }
@@ -245,17 +532,25 @@ final class AppState {
         {
             activeProjectID = id
             recordProjectVisit(id)
-            // Build the active project from its layout file if it has one (its
-            // snapshot was skipped above); otherwise the restored snapshot stands
-            // and `ensureWorkspace` only creates a default when neither exists.
             autoApplyLayoutOnFirstOpen(project)
-            ensureWorkspace(projectID: id, path: project.path)
+            ensureWorkspace(projectID: id, path: project.path, contextName: project.name)
+            // Reattaching remote panes need the zmx path before warm/render.
+            stampRemoteZmxPath(project)
             acknowledgeActiveTab(projectID: id)
             warmFocusedProject()
         }
-        // Reap leftover UUID sessions now that every restored pane's sessionID
-        // is known (referenced sessions are preserved for reattach/resurrect).
-        garbageCollectOrphanedSessions()
+        // Sweep crash/force-quit orphans: kill zero-client macterm-* sessions
+        // no restored pane claims. Attach-aware and fail-closed (a failed
+        // probe reaps nothing); foreign prefixes (supa-*, user sessions) are
+        // spared. Quick-terminal sessions are never persisted, so leftovers
+        // from a crash die here too.
+        let known = Set(workspaces.values
+            .flatMap(\.tabs)
+            .flatMap { $0.splitRoot.allPanes() }
+            .map(\.sessionName))
+        Task { [zmx] in await zmx.reapOrphans(knownSessionNames: known) }
+        // Begin periodic scrollback/command capture for post-reboot resurrect.
+        startResurrectCaptureTimer()
     }
 
     func saveWorkspaces() {
@@ -263,99 +558,99 @@ final class AppState {
             let panes = ws.tabs.reduce(0) { $0 + $1.splitRoot.allPanes().count }
             return "\(ws.projectID.uuidString.prefix(8)):tabs=\(ws.tabs.count),panes=\(panes)"
         }.joined(separator: " ")
-        resurrectDebug("SAVE: [\(summary)] terminating=\(AppTerminationState.isTerminating)")
+        // Read the resurrect-command cache captured off-main (empty when zmx is
+        // unavailable / nothing restartable is running) — never spawn a zmx
+        // subprocess on this main-thread save path.
         workspaceStore.save(WorkspaceSerializer.snapshot(workspaces, resurrectCommands: capturedResurrectCommands))
         // Record the boot time these sessions belong to, so the next launch can
         // tell whether the machine rebooted (sessions dead) or not (reattach).
         UserDefaults.standard.set(bootTimeAtLaunch, forKey: bootTimeKey)
     }
 
-    // MARK: - Reboot resurrect (capture + GC)
+    // MARK: - Reboot resurrect (capture)
 
-    /// Every sessionID referenced by a live pane across all workspaces (skipping
-    /// ephemeral panes, which never persist). Used to decide which scrollback
-    /// files to keep and which orphaned zmx sessions to reap.
-    private func referencedSessionIDs() -> Set<String> {
-        var ids: Set<String> = []
+    /// Every session name referenced by a live, non-ephemeral pane across all
+    /// workspaces. Bounds which scrollback files to keep and which sessions to
+    /// capture. Remote panes are skipped — their sessions live on the remote
+    /// host and survive a local reboot, so there's nothing to resurrect here.
+    private func referencedSessionNames() -> Set<String> {
+        var names: Set<String> = []
         for ws in workspaces.values {
             for tab in ws.tabs {
-                for pane in tab.splitRoot.allPanes() where !pane.ephemeral {
-                    ids.insert(pane.sessionID)
+                for pane in tab.splitRoot.allPanes() where !pane.ephemeral && !pane.isRemote {
+                    names.insert(pane.sessionName)
                 }
             }
         }
-        return ids
+        return names
+    }
+
+    /// Start the ~15s resurrect-capture timer. Called once at launch. Skipped
+    /// under XCTest (the test host boots real panes and would drive zmx) and
+    /// when zmx isn't bundled/available (nothing to capture).
+    func startResurrectCaptureTimer() {
+        // Skip under XCTest: the test host boots real panes and would drive the
+        // bundled zmx (`sessionListSnapshot`/`history`) on every `mise run test`.
+        let underTest = ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("XCTest") }
+        guard resurrectTimer == nil, !underTest, zmx.isBundled() else {
+            let bundled = zmx.isBundled()
+            logger.info("resurrect timer NOT started (underTest=\(underTest, privacy: .public) bundled=\(bundled, privacy: .public))")
+            return
+        }
+        let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.captureResurrectState() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        resurrectTimer = timer
+        logger.info("resurrect capture timer started")
     }
 
     /// Snapshot each live zmx-backed pane's scrollback to disk and refresh the
-    /// restartable-command cache `snapshot` reads, so a post-reboot restore can
-    /// replay both. No-op when persistence is off or zmx is absent.
+    /// restartable-command cache `saveWorkspaces` reads, so a post-reboot restore
+    /// can replay both. All zmx work is off-main.
     ///
-    /// Scrollback comes from `zmx history --vt` — the **daemon's** authoritative
-    /// full scrollback (its internal terminal, `screen = .all`, with per-cell
-    /// SGR color), not the client surface's `read_text` (which after a reattach
-    /// only holds a one-screen snapshot — the cause of the ~58-byte captures).
-    /// A session running an allowlisted full-screen program (editor/pager) is
-    /// "busy": its terminal shows the program UI, not shell history, so we skip
-    /// it and keep the last good capture. All off-main (zmx is subprocess).
-    /// Driven by `resurrectTimer` (~15s).
+    /// Leaders come from upstream's async `sessionListSnapshot` (no synchronous
+    /// `zmx list` on the main thread); the restartable command is derived from
+    /// each session's leader pid (`ProcessInspector.foregroundCommand`), and the
+    /// color scrollback from `zmx history --vt` (`ZmxService`, the only seam with
+    /// history/print/send). Scrollback capture is opt-out; commands always.
     func captureResurrectState() {
-        guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
-        let referenced = referencedSessionIDs()
+        let referenced = referencedSessionNames()
         guard !referenced.isEmpty else { return }
-        // Capture scrollback only when resurrection is on; capture a little more
-        // than we'll replay so the tail isn't starved after sanitize trims
-        // escapes. Commands are captured regardless (cheap, always useful).
         let captureScrollback = Preferences.shared.scrollbackResurrectionEnabled
+        // A little more than we'll replay, so the tail isn't starved after
+        // sanitize trims escapes.
         let captureBytes = Int(Preferences.shared.scrollbackRestoreMB * 1024 * 1024) + 512 * 1024
+        let zmxClient = zmx
         Task.detached(priority: .utility) {
-            let zmx = ZmxService.standard
-            let pidByID = Dictionary(
-                uniqueKeysWithValues: zmx.list().filter(\.isHealthy).compactMap { s in s.pid.map { (s.name, $0) } }
-            )
+            let leaders = await zmxClient.sessionListSnapshot()?.leaders ?? [:]
             var commands: [String: String] = [:]
-            for id in referenced {
-                if let pid = pidByID[id],
+            for name in referenced {
+                if let pid = leaders[name],
                    let cmd = RestartableCommand.restartable(ProcessInspector.foregroundCommand(ofSessionPID: pid))
                 {
-                    commands[id] = cmd
+                    commands[name] = cmd
                 }
             }
+            // A session running an allowlisted full-screen program shows the
+            // program UI, not shell history — skip its scrollback and keep the
+            // last good capture.
             let busy = Set(commands.keys)
+            let service = ZmxService.standard
             var captured = 0
-            for id in referenced where captureScrollback && !busy.contains(id) && pidByID[id] != nil {
-                if let vt = zmx.history(sessionID: id, maxBytes: captureBytes), !vt.isEmpty {
-                    ResurrectStore.write(sessionID: id, scrollback: vt)
+            for name in referenced where captureScrollback && !busy.contains(name) && leaders[name] != nil {
+                if let vt = service.history(sessionName: name, maxBytes: captureBytes), !vt.isEmpty {
+                    ResurrectStore.write(sessionName: name, scrollback: vt)
                     captured += 1
                 }
             }
             ResurrectStore.prune(keeping: referenced)
-            logger.info("captureResurrect: \(captured, privacy: .public) scrollback, \(commands.count, privacy: .public) restartable")
+            let nl = leaders.count, nc = commands.count
+            logger.info("captureResurrect: leaders=\(nl, privacy: .public) cmds=\(nc, privacy: .public) sb=\(captured, privacy: .public)")
             await MainActor.run {
                 self.capturedResurrectCommands = commands
                 self.saveWorkspaces()
             }
-        }
-    }
-
-    /// On launch, reap orphaned zmx sessions Seshterm created — UUID-named
-    /// sessions the daemon kept alive across an app quit that no restored pane
-    /// references. Never touches the user's own named sessions (non-UUID names)
-    /// or sessions still in use. The zmx subprocess work runs off the main
-    /// thread so it never blocks launch. No-op when persistence is off / no zmx.
-    private func garbageCollectOrphanedSessions() {
-        guard Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
-        let referenced = referencedSessionIDs()
-        Task.detached(priority: .utility) {
-            let zmx = ZmxService.standard
-            for session in zmx.list() {
-                // Only Seshterm-generated sessions (UUID names) are eligible —
-                // leave the user's `zmx attach mysession` alone.
-                guard UUID(uuidString: session.name) != nil, !referenced.contains(session.name) else { continue }
-                logger.info("GC orphaned zmx session: \(session.name, privacy: .public)")
-                zmx.kill(sessionID: session.name, force: true)
-            }
-            ResurrectStore.prune(keeping: referenced)
         }
     }
 
@@ -366,9 +661,26 @@ final class AppState {
         activeProjectID = project.id
         recordProjectVisit(project.id)
         autoApplyLayoutOnFirstOpen(project)
-        ensureWorkspace(projectID: project.id, path: project.path)
+        ensureWorkspace(projectID: project.id, path: project.path, contextName: project.name)
+        // Stamp the remote zmx path onto every pane BEFORE any surface spawns
+        // (warmFocusedProject / render → ensureNSView reads it). It's a host
+        // property re-derived from the project on each open, not persisted.
+        stampRemoteZmxPath(project)
         acknowledgeActiveTab(projectID: project.id)
         warmFocusedProject()
+        // Creating a workspace doesn't change any tab selection (the poll's
+        // usual wake signal), so bump it directly.
+        notePollEvent()
+    }
+
+    /// Apply `project.zmxPath` to every pane in its workspace, so the remote
+    /// spawn/kill/probe commands use it. Idempotent; safe to call on each
+    /// open. No-op for local projects (nil path leaves PATH resolution).
+    private func stampRemoteZmxPath(_ project: Project) {
+        guard let ws = workspaces[project.id] else { return }
+        for pane in ws.tabs.flatMap({ $0.splitRoot.allPanes() }) {
+            pane.remoteZmxPath = project.zmxPath
+        }
     }
 
     /// Start the shells for every tab of the focused project, not just the
@@ -381,8 +693,22 @@ final class AppState {
               let projectID = activeProjectID,
               let ws = workspaces[projectID]
         else { return }
-        for pane in Self.panesToWarm(in: ws) {
-            SurfaceIncubator.shared.warm(pane)
+        // Stagger the spawns: each warm is a login shell (PAM, rc files) and —
+        // when restoring — a `zmx attach` reattaching a daemon. Firing them all
+        // in one tick multiplies launch pressure with tab count (cmux hit a
+        // relaunch memory/PAM storm doing exactly this). 125ms apart keeps
+        // relaunch smooth; `warm` is idempotent, so a pane the user views
+        // before its slot just spawns early via SwiftUI and the delayed warm
+        // no-ops.
+        for (index, pane) in Self.panesToWarm(in: ws).enumerated() {
+            if index == 0 {
+                SurfaceIncubator.shared.warm(pane)
+                continue
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.125 * Double(index)) { [weak pane] in
+                guard let pane else { return }
+                SurfaceIncubator.shared.warm(pane)
+            }
         }
     }
 
@@ -395,12 +721,13 @@ final class AppState {
             .flatMap { $0.splitRoot.allPanes() }
     }
 
-    /// On a project's first open this session (no live/restored workspace yet),
-    /// build its workspace from `.macterm/layout.yaml` if present. Because there
-    /// are no live panes, the apply is pure-spawn — never destructive, never
-    /// prompts. A restored snapshot already populates `workspaces`, so it takes
-    /// precedence; if there's no layout file this no-ops and `ensureWorkspace`
-    /// creates the default single-pane workspace.
+    // On a project's first open this session (no live/restored workspace yet),
+    // build its workspace from the central project file matching its path.
+    // Because there are no live panes, the apply is pure-spawn — never
+    // destructive, never prompts. A restored snapshot already populates
+    // `workspaces`, so it takes precedence; with no applicable file this
+    // no-ops and `ensureWorkspace` creates the default single-pane workspace.
+
     /// A layout template chosen in the context picker when creating a new
     /// context, consumed once by `autoApplyLayoutOnFirstOpen`. Transient.
     @ObservationIgnored
@@ -419,12 +746,37 @@ final class AppState {
             executeLayoutPlan(plan, projectID: project.id)
             return
         }
-        guard LayoutFile.exists(atProjectRoot: project.path) else { return }
-        applyLayout(projectID: project.id, projectName: project.name, projectRoot: project.path)
+        switch projectFiles.applyState(forProjectPath: project.path) {
+        case .applicable:
+            applyLayoutPresentingError(project)
+        case .invalid:
+            // Surface the parse error; the default workspace is created after.
+            applyLayoutPresentingError(project)
+        case .emptyTabs:
+            break
+        case .none:
+            // Legacy seed: `applyLayoutPresentingError` imports a committed
+            // `.macterm/layout.yaml` before applying.
+            guard LayoutFile.exists(atProjectRoot: project.path) else { break }
+            applyLayoutPresentingError(project)
+        }
     }
 
-    /// Shows an open panel, adds the selected directory as a project, and selects it.
-    /// Returns the new project if one was created, nil if cancelled.
+    /// Deprecated seed path — remove next release (#114): a parseable in-repo
+    /// `.macterm/layout.yaml` is imported into the central directory, to then
+    /// be applied from there. Throws when the legacy file doesn't parse — the
+    /// caller surfaces it; nothing is imported.
+    private func importLegacyLayout(_ project: Project) throws {
+        let legacy = try LayoutFile.load(fromProjectRoot: project.path)
+        try projectFiles.write(
+            ProjectFile(name: project.name, path: project.path, tabs: legacy.tabs),
+            projectName: project.name
+        )
+        logger.info("Imported legacy layout for \(project.name, privacy: .public)")
+    }
+
+    /// Shows an open panel, adds or finds the selected directory as a project,
+    /// and selects it. Returns the selected project, nil if cancelled.
     @discardableResult
     func openProject(store: ProjectStore) -> Project? {
         let panel = NSOpenPanel()
@@ -433,12 +785,10 @@ final class AppState {
         panel.allowsMultipleSelection = false
         panel.message = "Select a project folder"
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        let project = Project(
+        let project = store.findOrCreate(
             name: url.lastPathComponent,
-            path: url.path(percentEncoded: false),
-            sortOrder: store.projects.count
+            path: url.path(percentEncoded: false)
         )
-        store.add(project)
         selectProject(project)
         return project
     }
@@ -468,6 +818,10 @@ final class AppState {
     /// `project.path`) will land in the new directory.
     func replaceProjectPathWithCurrentDir(projectStore: ProjectStore) {
         guard let projectID = activeProjectID,
+              let project = projectStore.projects.first(where: { $0.id == projectID }),
+              // Remote projects (#104): the reported pwd is a REMOTE
+              // directory — adopting it would corrupt the project's identity.
+              !project.isRemote,
               let pane = focusedPane(for: projectID),
               let pwd = pane.nsView?.currentPwd,
               !pwd.isEmpty
@@ -495,6 +849,13 @@ final class AppState {
         logger.debug("unloadProject: \(projectID, privacy: .public)")
         let snapshot = WorkspaceSerializer.snapshot([projectID: ws])
         for pane in ws.tabs.flatMap({ $0.splitRoot.allPanes() }) {
+            // Unload KILLS: with quit now a detach, this is the one action
+            // that stops a whole project's shells while keeping its layout
+            // (the group-kill #113 asked for). A detaching unload would be
+            // a trap — "unloaded" shells silently running forever. The
+            // snapshot keeps the layout; reopening spawns fresh shells in
+            // the saved cwds (`zmx attach` upserts over the dead names).
+            pane.killPersistentSession(using: zmx)
             pane.destroySurface()
         }
         if let restored = WorkspaceSerializer.restore(from: snapshot, validIDs: [projectID]).first {
@@ -508,6 +869,8 @@ final class AppState {
         logger.debug("removeProject: \(projectID, privacy: .public)")
         if let ws = workspaces[projectID] {
             for pane in ws.tabs.flatMap({ $0.splitRoot.allPanes() }) {
+                // Project removed for good → its sessions die with it.
+                pane.killPersistentSession(using: zmx)
                 pane.destroySurface()
             }
         }
@@ -516,13 +879,73 @@ final class AppState {
         saveWorkspaces()
     }
 
+    /// An unload staged for confirmation because one of the project's panes
+    /// has a running foreground program — unload now stops every shell in
+    /// the project (keeping the layout), so it's destructive.
+    struct PendingUnloadProject: Equatable {
+        let projectID: UUID
+    }
+
+    var pendingUnloadProject: PendingUnloadProject?
+
+    /// Unload a project, confirming first when any pane is busy.
+    func requestUnloadProject(_ projectID: UUID) {
+        let busy = workspaces[projectID]?.tabs
+            .flatMap { $0.splitRoot.allPanes() }
+            .contains { $0.nsView?.needsConfirmQuit() == true } ?? false
+        if busy {
+            pendingUnloadProject = PendingUnloadProject(projectID: projectID)
+            return
+        }
+        unloadProject(projectID)
+    }
+
+    func confirmPendingUnloadProject() {
+        guard let pending = pendingUnloadProject else { return }
+        pendingUnloadProject = nil
+        unloadProject(pending.projectID)
+    }
+
+    func cancelPendingUnloadProject() {
+        pendingUnloadProject = nil
+    }
+
+    /// Run `removal` (the caller's full remove: workspace + project store)
+    /// immediately when no pane in the project is busy; otherwise stage it
+    /// for the confirmation alert — removal kills every pane's zmx session.
+    func requestRemoveProject(_ projectID: UUID, removal: @escaping () -> Void) {
+        let busy = workspaces[projectID]?.tabs
+            .flatMap { $0.splitRoot.allPanes() }
+            .contains { $0.nsView?.needsConfirmQuit() == true } ?? false
+        if busy {
+            pendingRemoveProject = PendingRemoveProject(projectID: projectID, completeRemoval: removal)
+            return
+        }
+        removal()
+    }
+
+    func confirmPendingRemoveProject() {
+        guard let pending = pendingRemoveProject else { return }
+        pendingRemoveProject = nil
+        pending.completeRemoval()
+    }
+
+    func cancelPendingRemoveProject() {
+        pendingRemoveProject = nil
+    }
+
     // MARK: - Tabs
 
-    func createTab(projectID: UUID, projectPath: String) {
-        guard let ws = workspaces[projectID] else { return }
-        ws.createTab(projectPath: projectPath)
+    /// A `command` spawns in the new tab's pane via `initial_input` (layout
+    /// `run:` semantics). Returns the new tab's ID, nil when the project has
+    /// no live workspace.
+    @discardableResult
+    func createTab(projectID: UUID, projectPath: String, sessionSlug: String? = nil, command: String? = nil) -> UUID? {
+        guard let ws = workspaces[projectID] else { return nil }
+        let tab = ws.createTab(projectPath: projectPath, sessionSlug: sessionSlug, command: command)
         logger.debug("createTab: project=\(projectID, privacy: .public) tabs=\(ws.tabs.count, privacy: .public)")
         saveWorkspaces()
+        return tab.id
     }
 
     /// Convenience overload: look up the project's canonical path from the
@@ -530,7 +953,7 @@ final class AppState {
     /// not whatever cwd the last pane drifted to.
     func createTab(projectID: UUID, projects: [Project]) {
         guard let project = projects.first(where: { $0.id == projectID }) else { return }
-        createTab(projectID: projectID, projectPath: project.path)
+        createTab(projectID: projectID, projectPath: project.path, sessionSlug: project.name)
     }
 
     func closeTab(_ tabID: UUID, projectID: UUID) {
@@ -539,10 +962,36 @@ final class AppState {
         else { return }
         logger.debug("closeTab: \(tabID, privacy: .public) project=\(projectID, privacy: .public)")
         for pane in tab.splitRoot.allPanes() {
+            // Tab closed for good → its panes' zmx sessions die with it.
+            pane.killPersistentSession(using: zmx)
             pane.destroySurface()
         }
         ws.closeTab(tabID)
         saveWorkspaces()
+    }
+
+    /// Close a tab, confirming first when any of its panes has a running
+    /// foreground program — closing kills the panes' zmx sessions, so the
+    /// destructive-confirmation lives here (quit will detach, not kill).
+    func requestCloseTab(_ tabID: UUID, projectID: UUID) {
+        let tab = workspaces[projectID]?.tabs.first { $0.id == tabID }
+        let busy = tab?.splitRoot.allPanes()
+            .contains { $0.nsView?.needsConfirmQuit() == true } ?? false
+        if busy {
+            pendingCloseTab = PendingCloseTab(tabID: tabID, projectID: projectID)
+            return
+        }
+        closeTab(tabID, projectID: projectID)
+    }
+
+    func confirmPendingCloseTab() {
+        guard let pending = pendingCloseTab else { return }
+        pendingCloseTab = nil
+        closeTab(pending.tabID, projectID: pending.projectID)
+    }
+
+    func cancelPendingCloseTab() {
+        pendingCloseTab = nil
     }
 
     func selectTab(_ tabID: UUID, projectID: UUID) {
@@ -558,9 +1007,16 @@ final class AppState {
     /// project's workspace into another's. The `TerminalTab` object is reused
     /// as-is, so its surfaces stay valid (both workspaces live in the same
     /// window). The destination becomes the active project with the moved tab
-    /// selected, so the user lands where they meant to be. No-op for a
-    /// same-project move or an unknown source/tab.
-    func moveTab(_ tabID: UUID, from sourceProjectID: UUID, to destProjectID: UUID, destPath: String) {
+    /// selected, so the user lands where they meant to be. `toIndex` positions
+    /// the tab within the destination (a sidebar drop lands at a slot); nil
+    /// appends. No-op for a same-project move or an unknown source/tab.
+    func moveTab(
+        _ tabID: UUID,
+        from sourceProjectID: UUID,
+        to destProjectID: UUID,
+        destPath: String,
+        toIndex: Int? = nil
+    ) {
         guard sourceProjectID != destProjectID,
               let source = workspaces[sourceProjectID],
               let tab = source.tabs.first(where: { $0.id == tabID })
@@ -571,10 +1027,27 @@ final class AppState {
         ensureWorkspace(projectID: destProjectID, path: destPath)
         guard let dest = workspaces[destProjectID] else { return }
         source.closeTab(tabID)
-        dest.adoptTab(tab)
+        dest.adoptTab(tab, at: toIndex)
+        // Restamp the moved panes' routing identity to the destination project.
+        // Without this they keep the SOURCE projectID, so a later
+        // notification-click navigates to the old project and can't find the
+        // tab. Only the routing key changes — session identity (name/host)
+        // stays put, so a moved remote pane still tears down over ssh.
+        for pane in tab.splitRoot.allPanes() {
+            pane.rebind(projectID: destProjectID)
+        }
         activeProjectID = destProjectID
         recordProjectVisit(destProjectID)
         saveWorkspaces()
+    }
+
+    /// Reorder a tab within its own project to an absolute drop index (the
+    /// offset a sidebar drag-and-drop reports). Persists on a real move.
+    func reorderTab(_ tabID: UUID, inProject projectID: UUID, toIndex destination: Int) {
+        guard let ws = workspaces[projectID] else { return }
+        let before = ws.tabs.map(\.id)
+        ws.moveTab(tabID, toIndex: destination)
+        if ws.tabs.map(\.id) != before { saveWorkspaces() }
     }
 
     func selectNextTab(projectID: UUID) {
@@ -639,7 +1112,7 @@ final class AppState {
         let beforeTabID = workspaces[project.id]?.activeTabID
 
         activeProjectID = project.id
-        ensureWorkspace(projectID: project.id, path: project.path)
+        ensureWorkspace(projectID: project.id, path: project.path, contextName: project.name)
         let didAcknowledgeCompletion = workspaces[project.id]?.selectTab(tab.id) ?? false
         if activeProjectID != beforeProjectID
             || workspaces[project.id]?.activeTabID != beforeTabID
@@ -667,6 +1140,44 @@ final class AppState {
         logger.debug("splitPane: \(String(describing: direction), privacy: .public) pane=\(paneID, privacy: .public)")
         tab.split(paneID: paneID, direction: direction)
         saveWorkspaces()
+    }
+
+    /// Split a SPECIFIC pane — found in whichever of the project's tabs holds
+    /// it, unlike the focused-pane overload above — optionally spawning
+    /// `command` in the new pane. The control CLI's split path. Returns the
+    /// new pane's ID.
+    @discardableResult
+    func splitPane(
+        _ paneID: UUID,
+        direction: SplitDirection,
+        projectID: UUID,
+        command: String? = nil
+    ) -> UUID? {
+        guard let ws = workspaces[projectID],
+              let tab = ws.tabs.first(where: { $0.splitRoot.findPane(id: paneID) != nil })
+        else { return nil }
+        let newID = tab.split(paneID: paneID, direction: direction, command: command)
+        saveWorkspaces()
+        return newID
+    }
+
+    /// Split a pane into an equal `rows`×`columns` grid (see
+    /// `TerminalTab.makeGrid`), spawning `command` in each new pane. Returns
+    /// the new pane IDs.
+    @discardableResult
+    func makeGrid(
+        _ paneID: UUID,
+        rows: Int,
+        columns: Int,
+        projectID: UUID,
+        command: String? = nil
+    ) -> [UUID] {
+        guard let ws = workspaces[projectID],
+              let tab = ws.tabs.first(where: { $0.splitRoot.findPane(id: paneID) != nil })
+        else { return [] }
+        let created = tab.makeGrid(paneID: paneID, rows: rows, columns: columns, command: command)
+        if !created.isEmpty { saveWorkspaces() }
+        return created
     }
 
     /// Split the focused pane along its longer on-screen axis (Ghostty's
@@ -742,6 +1253,10 @@ final class AppState {
         logger.debug("closePane: \(paneID, privacy: .public) project=\(projectID, privacy: .public)")
         // If this is a scrollback-editor split, note where focus should return.
         let editorOrigin = scrollbackEditorOrigins.removeValue(forKey: paneID)
+        // Pane closed for good → its zmx session dies with it. (The
+        // onlyPaneLeft path below re-kills via closeTab; killSession is a
+        // no-op on a missing session, so the overlap is harmless.)
+        tab.splitRoot.findPane(id: paneID)?.killPersistentSession(using: zmx)
         switch tab.removePane(paneID) {
         case .onlyPaneLeft:
             closeTab(tab.id, projectID: projectID)
@@ -786,48 +1301,71 @@ final class AppState {
 
     // MARK: - Layout files
 
-    /// Apply a project's declarative layout to its live workspace, reconciling
-    /// with minimal destruction (see `LayoutReconciler`). A non-destructive
-    /// reconcile (only spawns + resizes) runs immediately; one that would
-    /// terminate panes/tabs is staged in `pendingLayoutApply` for confirmation.
-    /// Returns an error to surface if the file is missing or unparseable.
+    /// Apply the central project file matching `project.path` to its live
+    /// workspace, reconciling with minimal destruction (see
+    /// `LayoutReconciler`). A non-destructive reconcile (only spawns +
+    /// resizes) runs immediately; one that would terminate panes/tabs is
+    /// staged in `pendingLayoutApply` for confirmation. Returns an error to
+    /// surface when no file matches, the file is unparseable, or it declares
+    /// no tabs (an empty declaration must never plan "close every tab").
     @discardableResult
-    func applyLayout(projectID: UUID, projectName: String, projectRoot: String) -> Error? {
-        logger.info("applyLayout: project=\(projectName, privacy: .public)")
-        let file: LayoutFile
+    func applyLayout(project: Project) -> Error? {
+        logger.info("applyLayout: project=\(project.name, privacy: .public)")
+        let layout: LayoutFile
         do {
-            file = try LayoutFile.load(fromProjectRoot: projectRoot)
+            guard let file = try projectFiles.loadFull(forProjectPath: project.path) else {
+                return LayoutFileError.noProjectFile(projectPath: project.path)
+            }
+            guard let bridged = file.layoutFile else {
+                return LayoutFileError.noTabs
+            }
+            layout = bridged
         } catch {
             logger.error("applyLayout failed to load: \(error, privacy: .public)")
             return error
         }
         let plan = LayoutReconciler.plan(
-            layout: file,
-            workspace: workspaces[projectID],
-            projectRoot: projectRoot,
-            projectID: projectID
+            layout: layout,
+            workspace: workspaces[project.id],
+            projectRoot: project.path,
+            projectID: project.id
         )
         let planDesc = "tabs=\(plan.tabs.count) destroy=\(plan.panesToDestroy.count) closeTabs=\(plan.tabsToClose.count)"
         logger.info("applyLayout plan: \(planDesc, privacy: .public)")
-        // The file names a different project than the one we're applying to.
-        // Optional in the format, so only flag when present and mismatched.
-        let mismatchedName: String? = {
-            guard let saved = file.name, saved != projectName else { return nil }
-            return saved
-        }()
-        // Confirm if applying would destroy panes OR the project name mismatches.
-        if plan.isDestructive || mismatchedName != nil {
-            logger.info("applyLayout: staged for confirmation, mismatch=\(mismatchedName ?? "none", privacy: .public)")
-            pendingLayoutApply = PendingLayoutApply(
-                projectID: projectID,
-                plan: plan,
-                mismatchedProjectName: mismatchedName,
-                currentProjectName: projectName
-            )
+        if plan.isDestructive {
+            logger.info("applyLayout: staged for confirmation")
+            pendingLayoutApply = PendingLayoutApply(projectID: project.id, plan: plan)
         } else {
-            executeLayoutPlan(plan, projectID: projectID)
+            executeLayoutPlan(plan, projectID: project.id)
         }
         return nil
+    }
+
+    /// `applyLayout` + error presentation: failures land in
+    /// `pendingLayoutError` (the alert in `MactermApp`). The shared entry
+    /// point for the palette/menu command and the first-open auto-apply.
+    ///
+    /// When no central file declares the project's path but a committed
+    /// legacy `.macterm/layout.yaml` exists, it's imported first (deprecated
+    /// seed, #114). Explicit apply needs this as much as first open does:
+    /// an existing project always has a restored snapshot, so first-open
+    /// never fires for it — without this, its legacy file would be
+    /// unreachable for the whole deprecation window.
+    func applyLayoutPresentingError(_ project: Project) {
+        if projectFiles.find(forProjectPath: project.path) == nil,
+           LayoutFile.exists(atProjectRoot: project.path)
+        {
+            do {
+                try importLegacyLayout(project)
+            } catch {
+                logger.error("Legacy layout import failed: \(error, privacy: .public)")
+                pendingLayoutError = LayoutError(verb: "import", message: error.localizedDescription)
+                return
+            }
+        }
+        if let error = applyLayout(project: project) {
+            pendingLayoutError = LayoutError(verb: "apply", message: error.localizedDescription)
+        }
     }
 
     func confirmPendingLayoutApply() {
@@ -840,14 +1378,22 @@ final class AppState {
         pendingLayoutApply = nil
     }
 
-    /// Save the active project's live workspace to its `.macterm/layout.yaml`.
+    /// Save the project's live workspace as its central project file — one of
+    /// the two ways a project file ever changes (the other is the user's own
+    /// editor). Creates the file when none declares this path yet; realigns
+    /// the filename to the current name slug when it drifted.
     @discardableResult
-    func saveLayout(projectID: UUID, projectName: String, projectRoot: String) -> Error? {
-        logger.info("saveLayout: project=\(projectName, privacy: .public)")
-        guard let ws = workspaces[projectID] else { return nil }
+    func saveLayout(project: Project) -> Error? {
+        logger.info("saveLayout: project=\(project.name, privacy: .public)")
+        guard let ws = workspaces[project.id] else { return nil }
         do {
-            try LayoutSerializer.write(ws, projectName: projectName, projectRoot: projectRoot)
+            let layout = LayoutSerializer.layout(for: ws, projectName: project.name, projectRoot: project.path)
+            let target = try projectFiles.write(
+                ProjectFile(name: project.name, path: project.path, zmxPath: project.zmxPath, tabs: layout.tabs),
+                projectName: project.name
+            )
             logger.info("saveLayout succeeded: tabs=\(ws.tabs.count, privacy: .public)")
+            presentSaveConflictIfNeeded(project: project, savedTo: target)
             return nil
         } catch {
             logger.error("saveLayout failed: \(error, privacy: .public)")
@@ -869,6 +1415,40 @@ final class AppState {
         } catch {
             logger.error("saveWorkspaceAsLayout failed: \(error, privacy: .public)")
             return error
+        }
+    }
+
+    /// A save that lands next to *other* files declaring the same path gets a
+    /// visible notice, not just a log line: filename order decides which file
+    /// `find` picks, so a duplicate (hand-authored, or an old file whose
+    /// realign-delete failed) can silently shadow what was just saved.
+    private func presentSaveConflictIfNeeded(project: Project, savedTo target: URL) {
+        let matches = projectFiles.matches(forProjectPath: project.path)
+        guard matches.count > 1 else { return }
+        let winner = matches[0].url
+        // Compare by filename: names are unique within the directory, and the
+        // URLs come from different constructions (`appendingPathComponent` vs
+        // a directory listing) that need not compare equal for the same file.
+        let message = if winner.lastPathComponent != target.lastPathComponent {
+            "The layout was saved to “\(target.lastPathComponent)”, but “\(winner.lastPathComponent)” "
+                + "also declares this project’s path and takes precedence. "
+                + "Remove or merge the duplicate in the projects directory."
+        } else {
+            "Duplicate files also declare this project’s path and are ignored: "
+                + matches.dropFirst().map { "“\($0.url.lastPathComponent)”" }.joined(separator: ", ")
+                + ". The layout was saved to “\(target.lastPathComponent)”."
+        }
+        pendingLayoutError = LayoutError(
+            verb: "save",
+            message: message,
+            customTitle: "Layout saved with a conflict"
+        )
+    }
+
+    /// `saveLayout` + error presentation, mirroring `applyLayoutPresentingError`.
+    func saveLayoutPresentingError(_ project: Project) {
+        if let error = saveLayout(project: project) {
+            pendingLayoutError = LayoutError(verb: "save", message: error.localizedDescription)
         }
     }
 
@@ -899,7 +1479,11 @@ final class AppState {
         }
 
         // Destroy surfaces only AFTER the new trees no longer reference them.
+        // A layout-dropped pane is gone for good (no declared node claims it),
+        // so its zmx session dies too — otherwise it would linger as a
+        // clients==0 daemon.
         for pane in plan.panesToDestroy {
+            pane.killPersistentSession(using: zmx)
             pane.destroySurface()
         }
 
@@ -958,8 +1542,16 @@ final class AppState {
         }
         NSApp.activate()
         if let tab = workspaces[projectID]?.tabs.first(where: { $0.splitRoot.findPane(id: paneID) != nil }) {
-            let window = NSApp.keyWindow ?? NSApp.mainWindow
+            // Resolve the target window INSIDE the deferred continuation:
+            // `NSApp.activate()` is asynchronous, so reading keyWindow/mainWindow
+            // synchronously here (the common caller is a notification click while
+            // Macterm is inactive) returns nil and makes restoreFocus no-op. Fall
+            // back to the AppDelegate's cached terminal window when both are still
+            // nil (an ordered-out/unfocused SwiftUI window reports neither).
             DispatchQueue.main.async {
+                let window = NSApp.keyWindow
+                    ?? NSApp.mainWindow
+                    ?? (NSApp.delegate as? AppDelegate)?.mainWindow
                 FocusRestoration.restoreFocus(to: paneID, in: tab.splitRoot, window: window)
             }
         }
@@ -1048,7 +1640,10 @@ final class AppState {
         // non-focused split pane that finished a command stays `.done` under the
         // hood, gets persisted, and reappears as a checkmark after restart even
         // though the user saw an empty circle.
-        guard NSApp.isActive,
+        // Route through the injected `isAppActive` seam (not `NSApp.isActive`
+        // directly): NSApp is nil during construction and unset in tests, and
+        // this path is reachable from init via pollNow().
+        guard isAppActive(),
               projectID == activeProjectID,
               let tab = workspaces[projectID]?.activeTab,
               tab.splitRoot.findPane(id: paneID) != nil
@@ -1058,10 +1653,15 @@ final class AppState {
 
     // MARK: - Private
 
-    private func ensureWorkspace(projectID: UUID, path: String) {
+    /// - Parameter contextName: the project's context name, used as the zmx
+    ///   session-name slug for panes created here (so `zmx ls` groups by the
+    ///   user's chosen context, not the path basename). nil falls back to the
+    ///   basename. Only matters for a fresh default workspace — a restored one
+    ///   carries persisted session names.
+    private func ensureWorkspace(projectID: UUID, path: String, contextName: String? = nil) {
         if workspaces[projectID] == nil {
             resurrectDebug("ensureWorkspace: CREATED DEFAULT for \(projectID) (no restored workspace)")
-            workspaces[projectID] = Workspace(projectID: projectID, projectPath: path)
+            workspaces[projectID] = Workspace(projectID: projectID, projectPath: path, sessionSlug: contextName)
         }
     }
 

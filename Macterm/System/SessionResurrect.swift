@@ -40,8 +40,12 @@ enum SessionResurrect {
     /// then re-run the restartable command on top. No-op unless we rebooted,
     /// persistence is on, zmx is available, and there's something to replay.
     /// Fire-and-forget from `ensureNSView`; all zmx work runs off the main thread.
-    static func seedIfRebooted(sessionID: String, command: String?) {
-        guard didReboot, Preferences.shared.sessionPersistenceEnabled, ZmxService.standard.isAvailable else { return }
+    static func seedIfRebooted(sessionName: String, command: String?) {
+        // Upstream always persists sessions (no opt-in toggle), so the seed
+        // gates only on a genuine reboot + zmx availability. Scrollback replay
+        // stays opt-out below (`scrollbackResurrectionEnabled`); the command
+        // re-run happens regardless.
+        guard didReboot, ZmxService.standard.isAvailable else { return }
         // Scrollback replay is opt-out (the command re-run still happens either
         // way). Read the prefs here on the main actor; the byte cap is the
         // user's configured restore size.
@@ -49,7 +53,7 @@ enum SessionResurrect {
         let maxBytes = Int(Preferences.shared.scrollbackRestoreMB * 1024 * 1024)
         // The capture pads with trailing blank rows; trim before capping so the
         // tail-cap keeps real content. CRLF-normalize so it doesn't staircase.
-        let raw = replayScrollback ? ResurrectStore.scrollback(sessionID: sessionID) : nil
+        let raw = replayScrollback ? ResurrectStore.scrollback(sessionName: sessionName) : nil
         let scrollback = raw
             .map { cappedForReplay(sanitizeForReplay(trimTrailingBlankLines($0)), maxBytes: maxBytes) }
             .flatMap { $0.isEmpty ? nil : $0 }
@@ -57,10 +61,11 @@ enum SessionResurrect {
         // raw=-1 → file missing, raw=0 → empty, raw>0 & replay=0 → pipeline
         // collapsed it, replay>0 → we proceed.
         debugLog(
-            "READ \(sessionID.prefix(8)): raw=\(raw?.utf8.count ?? -1)B replay=\(scrollback?.utf8.count ?? 0)B command=\(command ?? "nil")"
+            "READ \(sessionName.prefix(8)): raw=\(raw?.utf8.count ?? -1)B "
+                + "replay=\(scrollback?.utf8.count ?? 0)B command=\(command ?? "nil")"
         )
         guard scrollback != nil || command?.isEmpty == false else {
-            debugLog("BAIL \(sessionID.prefix(8)): nothing to replay")
+            debugLog("BAIL \(sessionName.prefix(8)): nothing to replay")
             return
         }
         Task.detached(priority: .utility) {
@@ -70,48 +75,53 @@ enum SessionResurrect {
             var appeared = false
             for _ in 0 ..< 40 {
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                if zmx.list().contains(where: { $0.name == sessionID && $0.isHealthy }) {
+                if zmx.list().contains(where: { $0.name == sessionName && $0.isHealthy }) {
                     appeared = true
                     break
                 }
             }
             guard appeared else {
-                logger.error("resurrect seed timed out waiting for session \(sessionID, privacy: .public)")
-                debugLog("TIMEOUT \(sessionID.prefix(8)): session never appeared")
+                logger.error("resurrect seed timed out waiting for session \(sessionName, privacy: .public)")
+                debugLog("TIMEOUT \(sessionName.prefix(8)): session never appeared")
                 return
             }
-            debugLog("APPEARED \(sessionID.prefix(8)): replay=\(scrollback?.utf8.count ?? 0)B command=\(command ?? "nil")")
+            debugLog("APPEARED \(sessionName.prefix(8)): replay=\(scrollback?.utf8.count ?? 0)B command=\(command ?? "nil")")
             // Wait for the login shell to settle at its prompt — scrollback goes
             // non-empty and stops growing — so the client is rendering and our
             // injected bytes aren't dropped or wiped by the prompt redraw.
             var lastLen = -1
             for _ in 0 ..< 30 {
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                let len = zmx.history(sessionID: sessionID)?.count ?? 0
+                let len = zmx.history(sessionName: sessionName)?.count ?? 0
                 if len > 0, len == lastLen { break }
                 lastLen = len
             }
             if let scrollback {
-                // zmx renders a single `print` only up to ~4KB (the client relay's
-                // read buffer). Larger replays drop only when sent back-to-back —
-                // chunked under 4KB and paced, the live client takes ~200KB cleanly
-                // (verified). So chunk under 4KB and pace the calls.
+                // Chunked-and-paced replay, kept as a defensive measure. The
+                // BUNDLED zmx (thdxg/zmx 0.6.0) has no single-print size cliff —
+                // measured single prints render linearly past 4KB (18KB in →
+                // ~17KB rendered), so it wouldn't need this. But stock/older zmx
+                // dropped a single `print` in the ~4-8KB band (daemon read one
+                // 4096-byte chunk then closed on the POLLHUP `print` raises), and
+                // the `zmxPath` override can point resurrect at exactly such a
+                // binary — so we keep sub-4KB chunks + pacing, which is correct
+                // on every zmx variant (the reboot sim replays 500KB cleanly).
                 let chunks = ZmxService.chunkOnLines(scrollback, maxBytes: 3000)
                 for chunk in chunks {
-                    zmx.print(sessionID: sessionID, text: chunk)
+                    zmx.print(sessionName: sessionName, text: chunk)
                     try? await Task.sleep(nanoseconds: 25_000_000)
                 }
-                logger.info("resurrect replay \(sessionID, privacy: .public): \(chunks.count, privacy: .public) chunks")
-                debugLog("PRINT \(sessionID.prefix(8)): \(scrollback.utf8.count) bytes in \(chunks.count) chunks")
+                logger.info("resurrect replay \(sessionName, privacy: .public): \(chunks.count, privacy: .public) chunks")
+                debugLog("PRINT \(sessionName.prefix(8)): \(scrollback.utf8.count) bytes in \(chunks.count) chunks")
             } else {
-                debugLog("PRINT \(sessionID.prefix(8)): no scrollback to replay")
+                debugLog("PRINT \(sessionName.prefix(8)): no scrollback to replay")
             }
             if let command, !command.isEmpty {
                 try? await Task.sleep(nanoseconds: 200_000_000)
-                zmx.send(sessionID: sessionID, text: command + "\r")
-                debugLog("SEND \(sessionID.prefix(8)): \(command)")
+                zmx.send(sessionName: sessionName, text: command + "\r")
+                debugLog("SEND \(sessionName.prefix(8)): \(command)")
             }
-            logger.info("resurrected session \(sessionID, privacy: .public)")
+            logger.info("resurrected session \(sessionName, privacy: .public)")
         }
     }
 
