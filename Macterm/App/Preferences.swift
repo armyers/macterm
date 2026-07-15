@@ -60,7 +60,16 @@ enum SidebarStartupBehavior: String, CaseIterable, Identifiable {
 /// files Macterm generates around it.
 @MainActor @Observable
 final class Preferences {
-    static let shared = Preferences()
+    static let shared = Preferences(defaults: defaults)
+
+    /// The UserDefaults domain all Macterm state persists to — `.standard` in
+    /// the app, a wiped side suite under test (see `resolveDefaults()`). Use
+    /// this instead of `UserDefaults.standard` anywhere the app reads or
+    /// writes defaults directly (project recency, hotkey overrides), so those
+    /// writes get the same test isolation as `Preferences` properties.
+    /// `nonisolated(unsafe)` because the SDK doesn't mark `UserDefaults`
+    /// Sendable even though it's documented thread-safe.
+    nonisolated(unsafe) static let defaults: UserDefaults = resolveDefaults()
 
     // MARK: - Layout / appearance
 
@@ -136,6 +145,12 @@ final class Preferences {
         didSet { defaults.set(terminalScrollSpeed, forKey: Keys.terminalScrollSpeed) }
     }
 
+    /// How dark the overlay on an unfocused split pane gets (0–0.8, 0 = no dimming).
+    /// Capped below 1 so an unfocused pane is never fully black.
+    var paneDimOpacity: Double {
+        didSet { defaults.set(paneDimOpacity, forKey: Keys.paneDimOpacity) }
+    }
+
     // MARK: - Sidebar icons
 
     var projectIconSymbol: String {
@@ -180,6 +195,15 @@ final class Preferences {
         }
     }
 
+    /// When true, quitting Macterm kills every pane's zmx session so nothing
+    /// keeps running in the background. Default off — session persistence
+    /// (shells survive quit and reattach on relaunch) is the point, so quit
+    /// detaches rather than terminates. Macterm-side only; never touches the
+    /// ghostty config pipeline.
+    var terminateSessionsOnQuit: Bool {
+        didSet { defaults.set(terminateSessionsOnQuit, forKey: Keys.terminateSessionsOnQuit) }
+    }
+
     // MARK: - Toolbar
 
     var tabSwitcherVisibility: TabSwitcherVisibility {
@@ -203,6 +227,9 @@ final class Preferences {
         numberIconSquare,
         numberIconPlain,
     ]
+
+    /// Upper bound for `paneDimOpacity` — a fully black overlay reads as broken, not dim.
+    static let maxPaneDimOpacity: Double = 0.8
 
     /// Curated SF Symbols offered in Settings — keeps users from typing invalid names.
     static let projectIconChoices: [String] = [
@@ -244,7 +271,7 @@ final class Preferences {
     var windowOpacity: Double {
         didSet {
             defaults.set(windowOpacity, forKey: Keys.windowOpacity)
-            notifyConfigChanged()
+            notifyWindowAppearanceChanged()
         }
     }
 
@@ -252,7 +279,7 @@ final class Preferences {
     var windowBlurRadius: Int {
         didSet {
             defaults.set(windowBlurRadius, forKey: Keys.windowBlurRadius)
-            notifyConfigChanged()
+            notifyWindowAppearanceChanged()
         }
     }
 
@@ -265,7 +292,7 @@ final class Preferences {
     var windowGlassEnabled: Bool {
         didSet {
             defaults.set(windowGlassEnabled, forKey: Keys.windowGlassEnabled)
-            notifyConfigChanged()
+            notifyWindowAppearanceChanged()
         }
     }
 
@@ -275,7 +302,7 @@ final class Preferences {
     var windowGlassStyle: WindowGlassStyle {
         didSet {
             defaults.set(windowGlassStyle.rawValue, forKey: Keys.windowGlassStyle)
-            notifyConfigChanged()
+            notifyWindowAppearanceChanged()
         }
     }
 
@@ -309,6 +336,18 @@ final class Preferences {
         GhosttyApp.shared.reloadConfig()
     }
 
+    /// Notify observers that a WINDOW-APPEARANCE pref (opacity/blur/glass)
+    /// changed, WITHOUT regenerating the ghostty config or reloading libghostty.
+    /// Those values don't appear in the regenerated files (`background-opacity`
+    /// is pinned to 0 unconditionally) — `WindowAppearance.sync` reads them
+    /// straight from Preferences. Previously these setters ran the full
+    /// `notifyConfigChanged()` (two file writes + a whole-config libghostty
+    /// reload) purely to piggy-back on the `.mactermConfigDidChange` post it
+    /// ends with — heavyweight, and fired continuously while dragging a slider.
+    private func notifyWindowAppearanceChanged() {
+        NotificationCenter.default.post(name: .mactermConfigDidChange, object: nil)
+    }
+
     // MARK: - Quick terminal
 
     var quickTerminalEnabled: Bool {
@@ -334,9 +373,34 @@ final class Preferences {
 
     // MARK: - Init
 
+    /// The unit-test suite runs hosted inside the debug app, so
+    /// `UserDefaults.standard` there is the developer's real
+    /// `com.thdxg.macterm.debug` domain — a test mutating a preference (even
+    /// indirectly, e.g. `AppState.activeProjectID`'s write-through) would
+    /// corrupt the app they use day to day. Under a test run, back the app's
+    /// defaults with a wiped side suite instead so writes never leave the run.
+    nonisolated private static func resolveDefaults() -> UserDefaults {
+        guard isTestRun else { return .standard }
+        let suiteName = appBundleID + ".tests"
+        guard let suite = UserDefaults(suiteName: suiteName) else { return .standard }
+        // Wipe residue from previous runs so every test run starts clean.
+        suite.removePersistentDomain(forName: suiteName)
+        return suite
+    }
+
+    /// True when this process is an XCTest / Swift Testing host. Detected via
+    /// the runner's environment (`XCTestConfigurationFilePath`,
+    /// `XCTestSessionIdentifier`, … — the exact key varies by Xcode version)
+    /// rather than a loaded-class check: the test bundle injects only after app
+    /// launch, but the environment is set from process start, so this is
+    /// correct however early `shared` is first touched.
+    nonisolated private static var isTestRun: Bool {
+        ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("XCTest") }
+    }
+
     private let defaults: UserDefaults
 
-    private init(defaults: UserDefaults = .standard) {
+    private init(defaults: UserDefaults) {
         self.defaults = defaults
         autoTilingEnabled = defaults.bool(forKey: Keys.autoTiling)
         eagerlyStartProjectTabs = (defaults.object(forKey: Keys.eagerlyStartProjectTabs) as? Bool) ?? true
@@ -348,6 +412,9 @@ final class Preferences {
         inactivePaneDimming = min(0.9, max(0, (defaults.object(forKey: Keys.inactivePaneDimming) as? Double) ?? 0.45))
         warpCursorToActivePaneEnabled = defaults.object(forKey: Keys.warpCursorToActivePaneEnabled) as? Bool ?? true
         terminalScrollSpeed = Self.clampScrollSpeed(defaults.double(forKey: Keys.terminalScrollSpeed), fallback: 1.0)
+        paneDimOpacity = Self.clampPaneDimOpacity(
+            (defaults.object(forKey: Keys.paneDimOpacity) as? Double) ?? 0.2
+        )
         windowOpacity = (defaults.object(forKey: Keys.windowOpacity) as? Double) ?? 1.0
         windowBlurRadius = defaults.integer(forKey: Keys.windowBlurRadius)
         windowGlassEnabled = defaults.object(forKey: Keys.windowGlassEnabled) as? Bool ?? false
@@ -365,6 +432,7 @@ final class Preferences {
         sidebarVisible = defaults.object(forKey: Keys.sidebarVisible) as? Bool ?? false
         sidebarStartupBehavior = (defaults.string(forKey: Keys.sidebarStartupBehavior))
             .flatMap(SidebarStartupBehavior.init) ?? .visible
+        terminateSessionsOnQuit = defaults.object(forKey: Keys.terminateSessionsOnQuit) as? Bool ?? false
         tabSwitcherVisibility = (defaults.string(forKey: Keys.tabSwitcherVisibility))
             .flatMap(TabSwitcherVisibility.init(rawValue:)) ?? .whenMultiple
         Self.runOneTimeMigrations(defaults: defaults)
@@ -373,6 +441,10 @@ final class Preferences {
     private static func clampFraction(_ v: Double, fallback: Double) -> Double {
         guard v > 0 else { return fallback }
         return max(0.2, min(1.0, v))
+    }
+
+    private static func clampPaneDimOpacity(_ v: Double) -> Double {
+        max(0.0, min(maxPaneDimOpacity, v))
     }
 
     private static func clampScrollSpeed(_ v: Double, fallback: Double) -> Double {
@@ -408,6 +480,7 @@ final class Preferences {
         static let inactivePaneDimming = "macterm.pane.inactiveDimming"
         static let warpCursorToActivePaneEnabled = "macterm.pane.warpCursorToActivePane"
         static let terminalScrollSpeed = "macterm.terminal.scrollSpeed"
+        static let paneDimOpacity = "macterm.pane.dimOpacity"
         static let windowOpacity = "macterm.window.opacity"
         static let windowBlurRadius = "macterm.window.blurRadius"
         static let windowGlassEnabled = "macterm.window.glassEnabled"
@@ -423,6 +496,7 @@ final class Preferences {
         static let showNewProjectButton = "macterm.sidebar.showNewProjectButton"
         static let sidebarVisible = "macterm.sidebar.visible"
         static let sidebarStartupBehavior = "macterm.sidebar.startupBehavior"
+        static let terminateSessionsOnQuit = "macterm.session.terminateOnQuit"
         static let tabSwitcherVisibility = "macterm.toolbar.tabSwitcherVisibility"
         static let migrationV2GhosttyConfigOwned = "macterm.migration.v2_ghostty_config_owned"
     }
