@@ -97,10 +97,15 @@ enum SessionResurrect {
                 lastLen = len
             }
             if let scrollback {
-                // zmx renders a single `print` only up to ~4KB (the client relay's
-                // read buffer). Larger replays drop only when sent back-to-back —
-                // chunked under 4KB and paced, the live client takes ~200KB cleanly
-                // (verified). So chunk under 4KB and pace the calls.
+                // Chunked-and-paced replay, kept as a defensive measure. The
+                // BUNDLED zmx (thdxg/zmx 0.6.0) has no single-print size cliff —
+                // measured single prints render linearly past 4KB (18KB in →
+                // ~17KB rendered), so it wouldn't need this. But stock/older zmx
+                // dropped a single `print` in the ~4-8KB band (daemon read one
+                // 4096-byte chunk then closed on the POLLHUP `print` raises), and
+                // the `zmxPath` override can point resurrect at exactly such a
+                // binary — so we keep sub-4KB chunks + pacing, which is correct
+                // on every zmx variant (the reboot sim replays 500KB cleanly).
                 let chunks = ZmxService.chunkOnLines(scrollback, maxBytes: 3000)
                 for chunk in chunks {
                     zmx.print(sessionName: sessionName, text: chunk)

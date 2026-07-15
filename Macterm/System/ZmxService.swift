@@ -94,12 +94,14 @@ struct ZmxService {
 
     /// Inject `text` into the session's terminal display (`zmx print`), preserving
     /// ANSI/color. Raw bytes, not pty input — doesn't run anything. One IPC
-    /// `.Output` message. Stock zmx silently drops a single message in the
-    /// ~4-8KB band (the daemon reads one 4096-byte chunk then closes on the
-    /// POLLHUP `print` raises by exiting immediately); a patched daemon handles
-    /// any size. So callers replaying large scrollback chunk via `chunkOnLines`
-    /// (under 4KB) and pace the calls to stay correct on stock zmx (see
-    /// `SessionResurrect.seedIfRebooted`).
+    /// `.Output` message. The bundled zmx (thdxg/zmx 0.6.0) handles a single
+    /// print of any measured size (verified: 18KB in → ~17KB rendered, no 4KB
+    /// cliff). Older/stock zmx silently dropped a single message in the ~4-8KB
+    /// band (the daemon read one 4096-byte chunk then closed on the POLLHUP
+    /// `print` raises by exiting immediately). Since the `zmxPath` override can
+    /// point at such a binary, callers replaying large scrollback still chunk
+    /// via `chunkOnLines` (under 4KB) and pace the calls — correct on every zmx
+    /// variant (see `SessionResurrect.seedIfRebooted`).
     func print(sessionName: String, text: String) {
         _ = run(["print", sessionName, text])
     }
