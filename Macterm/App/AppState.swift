@@ -149,6 +149,20 @@ final class AppState {
     @ObservationIgnored
     private var pollTimerDelay: TimeInterval?
 
+    /// Periodic capture of zmx-backed panes' color scrollback + restartable
+    /// command for post-reboot resurrect, plus a workspace save. Fires ~every
+    /// 15s — far slower than the process poll, since it drives `zmx history`
+    /// per pane. Created once at launch, independent of the poll cadence (which
+    /// pauses when nothing is on screen), so background state keeps being saved.
+    @ObservationIgnored
+    private var resurrectTimer: Timer?
+
+    /// sessionName → restartable foreground command, refreshed off-main by
+    /// `captureResurrectState`. `saveWorkspaces` reads this cache so a snapshot
+    /// never has to spawn a zmx subprocess on the (main) save path.
+    @ObservationIgnored
+    private var capturedResurrectCommands: [String: String] = [:]
+
     @ObservationIgnored
     private var pollCadence = PollCadence()
 
@@ -535,6 +549,8 @@ final class AppState {
             .flatMap { $0.splitRoot.allPanes() }
             .map(\.sessionName))
         Task { [zmx] in await zmx.reapOrphans(knownSessionNames: known) }
+        // Begin periodic scrollback/command capture for post-reboot resurrect.
+        startResurrectCaptureTimer()
     }
 
     func saveWorkspaces() {
@@ -542,12 +558,100 @@ final class AppState {
             let panes = ws.tabs.reduce(0) { $0 + $1.splitRoot.allPanes().count }
             return "\(ws.projectID.uuidString.prefix(8)):tabs=\(ws.tabs.count),panes=\(panes)"
         }.joined(separator: " ")
-        // TODO(stage2): resurrect capture removed for the upstream-substrate
-        // merge; snapshot no longer threads a resurrect-command cache.
-        workspaceStore.save(WorkspaceSerializer.snapshot(workspaces))
+        // Read the resurrect-command cache captured off-main (empty when zmx is
+        // unavailable / nothing restartable is running) — never spawn a zmx
+        // subprocess on this main-thread save path.
+        workspaceStore.save(WorkspaceSerializer.snapshot(workspaces, resurrectCommands: capturedResurrectCommands))
         // Record the boot time these sessions belong to, so the next launch can
         // tell whether the machine rebooted (sessions dead) or not (reattach).
         UserDefaults.standard.set(bootTimeAtLaunch, forKey: bootTimeKey)
+    }
+
+    // MARK: - Reboot resurrect (capture)
+
+    /// Every session name referenced by a live, non-ephemeral pane across all
+    /// workspaces. Bounds which scrollback files to keep and which sessions to
+    /// capture. Remote panes are skipped — their sessions live on the remote
+    /// host and survive a local reboot, so there's nothing to resurrect here.
+    private func referencedSessionNames() -> Set<String> {
+        var names: Set<String> = []
+        for ws in workspaces.values {
+            for tab in ws.tabs {
+                for pane in tab.splitRoot.allPanes() where !pane.ephemeral && !pane.isRemote {
+                    names.insert(pane.sessionName)
+                }
+            }
+        }
+        return names
+    }
+
+    /// Start the ~15s resurrect-capture timer. Called once at launch. Skipped
+    /// under XCTest (the test host boots real panes and would drive zmx) and
+    /// when zmx isn't bundled/available (nothing to capture).
+    func startResurrectCaptureTimer() {
+        // Skip under XCTest: the test host boots real panes and would drive the
+        // bundled zmx (`sessionListSnapshot`/`history`) on every `mise run test`.
+        let underTest = ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("XCTest") }
+        guard resurrectTimer == nil, !underTest, zmx.isBundled() else {
+            let bundled = zmx.isBundled()
+            logger.info("resurrect timer NOT started (underTest=\(underTest, privacy: .public) bundled=\(bundled, privacy: .public))")
+            return
+        }
+        let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.captureResurrectState() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        resurrectTimer = timer
+        logger.info("resurrect capture timer started")
+    }
+
+    /// Snapshot each live zmx-backed pane's scrollback to disk and refresh the
+    /// restartable-command cache `saveWorkspaces` reads, so a post-reboot restore
+    /// can replay both. All zmx work is off-main.
+    ///
+    /// Leaders come from upstream's async `sessionListSnapshot` (no synchronous
+    /// `zmx list` on the main thread); the restartable command is derived from
+    /// each session's leader pid (`ProcessInspector.foregroundCommand`), and the
+    /// color scrollback from `zmx history --vt` (`ZmxService`, the only seam with
+    /// history/print/send). Scrollback capture is opt-out; commands always.
+    func captureResurrectState() {
+        let referenced = referencedSessionNames()
+        guard !referenced.isEmpty else { return }
+        let captureScrollback = Preferences.shared.scrollbackResurrectionEnabled
+        // A little more than we'll replay, so the tail isn't starved after
+        // sanitize trims escapes.
+        let captureBytes = Int(Preferences.shared.scrollbackRestoreMB * 1024 * 1024) + 512 * 1024
+        let zmxClient = zmx
+        Task.detached(priority: .utility) {
+            let leaders = await zmxClient.sessionListSnapshot()?.leaders ?? [:]
+            var commands: [String: String] = [:]
+            for name in referenced {
+                if let pid = leaders[name],
+                   let cmd = RestartableCommand.restartable(ProcessInspector.foregroundCommand(ofSessionPID: pid))
+                {
+                    commands[name] = cmd
+                }
+            }
+            // A session running an allowlisted full-screen program shows the
+            // program UI, not shell history — skip its scrollback and keep the
+            // last good capture.
+            let busy = Set(commands.keys)
+            let service = ZmxService.standard
+            var captured = 0
+            for name in referenced where captureScrollback && !busy.contains(name) && leaders[name] != nil {
+                if let vt = service.history(sessionName: name, maxBytes: captureBytes), !vt.isEmpty {
+                    ResurrectStore.write(sessionName: name, scrollback: vt)
+                    captured += 1
+                }
+            }
+            ResurrectStore.prune(keeping: referenced)
+            let nl = leaders.count, nc = commands.count
+            logger.info("captureResurrect: leaders=\(nl, privacy: .public) cmds=\(nc, privacy: .public) sb=\(captured, privacy: .public)")
+            await MainActor.run {
+                self.capturedResurrectCommands = commands
+                self.saveWorkspaces()
+            }
+        }
     }
 
     // MARK: - Project

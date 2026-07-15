@@ -82,6 +82,12 @@ struct PaneSnapshot: Codable {
     /// did NOT survive (reboot, external kill) respawns where the user was.
     /// A surviving session reattaches with its own live cwd regardless.
     var workingDirectory: String?
+    /// The restartable foreground command captured for post-reboot resurrect
+    /// (allowlisted editor/pager/monitor — `RestartableCommand`). Replayed via
+    /// `zmx send` after a reboot when the session had to respawn fresh; nil for
+    /// an idle prompt or a non-allowlisted program. Optional so older snapshots
+    /// decode as nil. Distinct from a layout `run:` (which is not persisted here).
+    var resurrectCommand: String?
     // No `title`: the tab name is derived live from the pane's foreground
     // process, so there's nothing per-pane to persist. (An older snapshot's
     // `title` key is harmlessly ignored on decode.)
@@ -95,7 +101,8 @@ struct PaneSnapshot: Codable {
         needsAttention: Bool? = nil,
         sessionID: UUID? = nil,
         sessionName: String? = nil,
-        workingDirectory: String? = nil
+        workingDirectory: String? = nil,
+        resurrectCommand: String? = nil
     ) {
         self.id = id
         self.projectPath = projectPath
@@ -103,6 +110,7 @@ struct PaneSnapshot: Codable {
         self.sessionID = sessionID
         self.sessionName = sessionName
         self.workingDirectory = workingDirectory
+        self.resurrectCommand = resurrectCommand
     }
 }
 
@@ -236,7 +244,14 @@ final class WorkspaceStore {
 
 @MainActor
 enum WorkspaceSerializer {
-    static func snapshot(_ workspaces: [UUID: Workspace]) -> [WorkspaceSnapshot] {
+    /// - Parameter resurrectCommands: sessionName → restartable foreground command,
+    ///   captured off-main by `AppState.captureResurrectState`. Read here so the
+    ///   (frequent, main-thread) save path never spawns a zmx subprocess. Empty
+    ///   when zmx is unavailable or nothing restartable is running.
+    static func snapshot(
+        _ workspaces: [UUID: Workspace],
+        resurrectCommands: [String: String] = [:]
+    ) -> [WorkspaceSnapshot] {
         // Sort by projectID so the serialized file is byte-stable across saves
         // (Dictionary.values iteration order is unspecified). restore() is
         // order-independent, so this only tames diff churn on the file.
@@ -249,7 +264,7 @@ enum WorkspaceSerializer {
                         id: tab.id,
                         customTitle: tab.customTitle,
                         focusedPaneID: tab.focusedPaneID,
-                        splitRoot: snapshotNode(tab.splitRoot)
+                        splitRoot: snapshotNode(tab.splitRoot, resurrectCommands: resurrectCommands)
                     )
                 }
             )
@@ -269,7 +284,7 @@ enum WorkspaceSerializer {
         }
     }
 
-    static func snapshotNode(_ node: SplitNode) -> SplitNodeSnapshot {
+    static func snapshotNode(_ node: SplitNode, resurrectCommands: [String: String] = [:]) -> SplitNodeSnapshot {
         switch node {
         case let .pane(p):
             // `projectPath` is the pane's IDENTITY — persisted verbatim so a
@@ -289,20 +304,24 @@ enum WorkspaceSerializer {
                 ? nil
                 : (p.nsView?.currentPwd ?? ProcessInspector.foregroundWorkingDirectory(forPane: p))
             let needsAttention = p.executionState == .done
+            // The restartable command was captured off-main into the cache keyed
+            // by session name; an ephemeral pane never carries one.
+            let resurrectCommand = p.ephemeral ? nil : resurrectCommands[p.sessionName]
             return .pane(PaneSnapshot(
                 id: p.id,
                 projectPath: p.projectPath,
                 needsAttention: needsAttention,
                 sessionID: p.sessionID,
                 sessionName: p.sessionName,
-                workingDirectory: liveCwd
+                workingDirectory: liveCwd,
+                resurrectCommand: resurrectCommand
             ))
         case let .split(b):
             return .split(SplitBranchSnapshot(
                 direction: b.direction,
                 ratio: Double(b.ratio),
-                first: snapshotNode(b.first),
-                second: snapshotNode(b.second)
+                first: snapshotNode(b.first, resurrectCommands: resurrectCommands),
+                second: snapshotNode(b.second, resurrectCommands: resurrectCommands)
             ))
         }
     }
@@ -325,7 +344,8 @@ enum WorkspaceSerializer {
                 projectPath: p.workingDirectory ?? p.projectPath,
                 projectID: projectID,
                 sessionID: p.sessionID ?? UUID(),
-                sessionName: p.sessionName
+                sessionName: p.sessionName,
+                resurrectCommand: p.resurrectCommand
             )
             if p.needsAttention == true {
                 pane.restoreNeedsAttention()

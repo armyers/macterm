@@ -339,6 +339,46 @@ struct WorkspaceSerializerSessionIdentityTests {
     }
 
     @Test
+    func resurrect_command_persists_and_restores_to_pane() throws {
+        // A captured restartable command must round-trip through the snapshot
+        // onto the restored pane, so the post-reboot seed can re-run it.
+        let projectID = UUID()
+        let snap = WorkspaceSnapshot(
+            projectID: projectID,
+            activeTabID: nil,
+            tabs: [TabSnapshot(
+                id: UUID(),
+                customTitle: nil,
+                focusedPaneID: nil,
+                splitRoot: .pane(PaneSnapshot(
+                    id: UUID(),
+                    projectPath: "/tmp/proj",
+                    sessionID: UUID(),
+                    sessionName: "macterm-proj-aaaaaaaabbbb",
+                    resurrectCommand: "nvim README.md"
+                ))
+            )]
+        )
+        let restored = try #require(
+            WorkspaceSerializer.restore(from: [snap], validIDs: [projectID]).first
+        )
+        let pane = try #require(restored.tabs.first?.splitRoot.allPanes().first)
+        #expect(pane.resurrectCommand == "nvim README.md")
+    }
+
+    @Test
+    func pane_snapshot_round_trips_resurrect_command() throws {
+        let snap = PaneSnapshot(
+            id: UUID(),
+            projectPath: "/tmp",
+            sessionName: "macterm-x-0011",
+            resurrectCommand: "hx"
+        )
+        let back = try JSONDecoder().decode(PaneSnapshot.self, from: JSONEncoder().encode(snap))
+        #expect(back.resurrectCommand == "hx")
+    }
+
+    @Test
     func old_snapshot_without_identity_gets_a_fresh_session() throws {
         let projectID = UUID()
         let snap = WorkspaceSnapshot(

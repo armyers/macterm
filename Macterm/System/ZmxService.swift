@@ -65,8 +65,8 @@ struct ZmxService {
     /// treats `"\r\n"` as one grapheme, so a `split(separator: "\n")` line cap
     /// silently never matches and keeps everything. Trims to the next newline so
     /// the first retained line isn't a partial (which could orphan an SGR escape).
-    func history(sessionID: String, maxBytes: Int = 2_621_440) -> String? {
-        guard let output = run(["history", sessionID, "--vt"]) else { return nil }
+    func history(sessionName: String, maxBytes: Int = 2_621_440) -> String? {
+        guard let output = run(["history", sessionName, "--vt"]) else { return nil }
         return Self.tailKeepingBytes(output, maxBytes: maxBytes)
     }
 
@@ -100,8 +100,8 @@ struct ZmxService {
     /// any size. So callers replaying large scrollback chunk via `chunkOnLines`
     /// (under 4KB) and pace the calls to stay correct on stock zmx (see
     /// `SessionResurrect.seedIfRebooted`).
-    func print(sessionID: String, text: String) {
-        _ = run(["print", sessionID, text])
+    func print(sessionName: String, text: String) {
+        _ = run(["print", sessionName, text])
     }
 
     /// Split `text` into pieces of at most ~`maxBytes`, breaking only at line
@@ -144,8 +144,8 @@ struct ZmxService {
 
     /// Send raw input to the session's pty (`zmx send`), as if typed. Used to
     /// re-run the restartable command after a reboot (append `\r` to submit).
-    func send(sessionID: String, text: String) {
-        _ = run(["send", sessionID, text])
+    func send(sessionName: String, text: String) {
+        _ = run(["send", sessionName, text])
     }
 
     /// Run `zmx <args>`, returning stdout (nil if zmx is absent or fails to
@@ -155,6 +155,14 @@ struct ZmxService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: bin)
         process.arguments = args
+        // Pin ZMX_DIR to the SAME socket dir the panes' `zmx attach` wrapper
+        // uses (`ZmxClient.runZmx` / `ZmxAttach`), so resurrect's history/print/
+        // send reach the exact daemon the sessions live in — not whatever dir a
+        // bare zmx would default to. Without this, a session spawned under a
+        // pinned ZMX_DIR is invisible to these reads.
+        var env = ProcessInfo.processInfo.environment
+        env["ZMX_DIR"] = ZmxSocketBudget.socketDir(env: env)
+        process.environment = env
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()
@@ -215,7 +223,13 @@ extension ZmxService {
     /// patched daemon) wins over a Homebrew install without symlink surgery.
     static var standard: ZmxService {
         var candidates: [String] = []
-        // User-set override (Settings → Session Persistence), tried first so an
+        // The bundled binary (Contents/Resources/zmx/zmx) is what every pane's
+        // `command_wrapper` attaches through, so resurrect must drive the SAME
+        // binary — a version-matched daemon at the same socket dir. Tried first.
+        if let bundled = Bundle.main.url(forResource: "zmx", withExtension: nil, subdirectory: "zmx") {
+            candidates.append(bundled.path)
+        }
+        // User-set override (Settings → Session Persistence), tried next so an
         // install outside the list below is found. Read straight from
         // UserDefaults to stay non-isolated (Preferences is @MainActor).
         if let override = UserDefaults.standard.string(forKey: Preferences.Keys.zmxPathOverride),

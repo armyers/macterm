@@ -44,6 +44,8 @@ private struct GeneralSettings: View {
     @State private var autoTilingEnabled: Bool = Preferences.shared.autoTilingEnabled
     @State private var eagerlyStartProjectTabs: Bool = Preferences.shared.eagerlyStartProjectTabs
     @State private var terminateSessionsOnQuit: Bool = Preferences.shared.terminateSessionsOnQuit
+    @State private var scrollbackResurrectionEnabled: Bool = Preferences.shared.scrollbackResurrectionEnabled
+    @State private var scrollbackRestoreMB: Double = Preferences.shared.scrollbackRestoreMB
 
     /// Why session persistence is inactive, when it is. Missing binary is a
     /// dev-build state; an over-budget socket path is an environment problem
@@ -153,6 +155,26 @@ private struct GeneralSettings: View {
                     .font(.system(size: 11))
                     .foregroundStyle(MactermTheme.warning)
                 }
+
+                Toggle("Resurrect scrollback after a reboot", isOn: $scrollbackResurrectionEnabled)
+                    .onChange(of: scrollbackResurrectionEnabled) { _, v in
+                        Preferences.shared.scrollbackResurrectionEnabled = v
+                    }
+                if scrollbackResurrectionEnabled {
+                    Stepper(value: $scrollbackRestoreMB, in: 0.25 ... 8, step: 0.25) {
+                        Text("Restore up to \(scrollbackRestoreMB, specifier: "%g") MB per pane")
+                    }
+                    .onChange(of: scrollbackRestoreMB) { _, v in
+                        Preferences.shared.scrollbackRestoreMB = v
+                    }
+                }
+                Text(
+                    "A reboot kills the session daemon, so panes respawn fresh. When on, each pane's most-recent "
+                        + "color scrollback is replayed and an editor/pager/monitor is relaunched. "
+                        + "Reattach across an ordinary quit is unaffected."
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

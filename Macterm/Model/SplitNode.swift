@@ -312,6 +312,13 @@ final class Pane: Identifiable {
     /// never be backed by a persistent zmx session and isn't worth restoring as
     /// its command across restarts. Not persisted — restores as a plain shell.
     let ephemeral: Bool
+    /// The restartable foreground command captured for post-reboot resurrect
+    /// (an allowlisted editor/pager/monitor — see `RestartableCommand`). Set on
+    /// restore from the snapshot; `ensureNSView` replays it via `zmx send` ONLY
+    /// when the machine rebooted (`SessionResurrect.didReboot`). Distinct from
+    /// `command` (the layout `run:` initial input, typed on every spawn) — a
+    /// live reattach after a plain app quit must NOT re-run it.
+    let resurrectCommand: String?
     /// The basename of the pane's live foreground process — a running command
     /// (`hx`, `btop`), or the pane's shell when idle at a prompt (so a nested
     /// `zsh` launched inside `nu` shows `zsh`). nil only before the surface
@@ -599,8 +606,14 @@ final class Pane: Identifiable {
             remoteZmxPath: remoteZmxPath
         )
         _nsView = view
-        // TODO(stage2): re-graft reboot resurrect (SessionResurrect.seedIfRebooted)
-        // onto upstream's sessionName-keyed model.
+        // After a reboot this `zmx attach` spawned a *fresh* session (the daemon
+        // didn't survive). Seed it: replay the saved color scrollback and re-run
+        // the captured restartable command. No-op on an app-quit relaunch (live
+        // reattach, `didReboot` false) and for remote panes (their daemon lives
+        // on the host and survives a local reboot).
+        if !ephemeral, remoteSpec == nil {
+            SessionResurrect.seedIfRebooted(sessionName: sessionName, command: resurrectCommand)
+        }
         return view
     }
 
@@ -714,7 +727,8 @@ final class Pane: Identifiable {
         command: String? = nil,
         shell: String? = nil,
         env: [String: String]? = nil,
-        ephemeral: Bool = false
+        ephemeral: Bool = false,
+        resurrectCommand: String? = nil
     ) {
         self.projectPath = projectPath
         self.projectID = projectID
@@ -746,6 +760,7 @@ final class Pane: Identifiable {
         self.shell = shell
         self.env = env
         self.ephemeral = ephemeral
+        self.resurrectCommand = resurrectCommand
         executionTracker = TerminalExecutionTracker(hasUserInteraction: command != nil)
     }
 
