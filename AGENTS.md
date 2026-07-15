@@ -88,18 +88,18 @@ Constraints, all deliberate: zmx must be preinstalled on the host (set `zmxPath`
 
 zmx-backed panes survive a **reboot** (tmux-resurrect style), not just an app quit. `AppState` captures each live session's color scrollback (`zmx history --vt`, byte-capped ~2.5MB by `ZmxService.tailKeepingBytes`) and its restartable foreground command every ~15s. Reboot is detected by comparing `kern.boottime` (saved per workspace save) to launch (`SessionResurrect.didReboot`). On an app quit the daemon survives, so `zmx attach` reattaches live; on a reboot the daemon is gone, so `SessionResurrect.seedIfRebooted` replays the saved scrollback (capped 2MB, sanitized, chunked under 4KB and paced via `zmx print`) into the fresh session, then re-runs the command. Replay is chunked/paced because stock zmx drops a single `print` in the ~4-8KB band; the chunking keeps it correct on stock zmx.
 
-**Testing without an actual reboot:** a UserDefaults override forces the reboot/seed path so you can test with `pkill zmx` + relaunch. The app only reads it (never writes), so it's a no-op in production and safe to toggle while the app runs (takes effect next launch). When set, a temp debug log at `${TMPDIR}seshterm-restore-debug.log` records the seed trace (`READ`/`APPEARED`/`PRINT`/`SEND`).
+**Testing without an actual reboot:** a UserDefaults override forces the reboot/seed path so you can test with `pkill zmx` + relaunch. The app only reads it (never writes), so it's a no-op in production and safe to toggle while the app runs (takes effect next launch). When set, a temp debug log at `${TMPDIR}cyote-arm-restore-debug.log` records the seed trace (`READ`/`APPEARED`/`PRINT`/`SEND`).
 
 ```bash
 # ON: force the reboot/seed path (pkill zmx + relaunch then resurrects)
-defaults write  com.thdxg.seshterm macterm.resurrect.forceReboot -bool true
+defaults write  com.thdxg.cyotearm macterm.resurrect.forceReboot -bool true
 # OFF: back to real kern.boottime detection (only a genuine reboot resurrects)
-defaults delete com.thdxg.seshterm macterm.resurrect.forceReboot
+defaults delete com.thdxg.cyotearm macterm.resurrect.forceReboot
 # check
-defaults read   com.thdxg.seshterm macterm.resurrect.forceReboot
+defaults read   com.thdxg.cyotearm macterm.resurrect.forceReboot
 ```
 
-Use `com.thdxg.seshterm.debug` as the domain for debug builds.
+Use `com.thdxg.cyotearm.debug` as the domain for debug builds.
 
 ## Layout
 

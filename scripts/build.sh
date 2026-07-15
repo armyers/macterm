@@ -38,7 +38,7 @@ rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
 # Code-signing identity. The project default is ad-hoc ("-"), which gives a
 # fresh signature on every build — so macOS keeps re-prompting for TCC
 # permissions (Downloads, Full Disk Access, …). Set MACTERM_SIGN_IDENTITY to a
-# stable cert (e.g. a self-signed "Seshterm Dev" Code Signing cert in Keychain)
+# stable cert (e.g. a self-signed "CYOTE-arm Dev" Code Signing cert in Keychain)
 # to sign with a consistent identity so those grants persist across rebuilds.
 # Unset → ad-hoc as before. The export step below uses signingStyle=manual and
 # doesn't re-sign, so the archive's signature carries into the exported app.

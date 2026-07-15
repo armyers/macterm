@@ -130,7 +130,7 @@ enum SessionResurrect {
     /// reliable channel for observing the seed during testing.
     nonisolated static func debugLog(_ message: String) {
         guard UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot") else { return }
-        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "seshterm-restore-debug.log")
+        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "cyote-arm-restore-debug.log")
         let line = Data((message + "\n").utf8)
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()

@@ -5,8 +5,8 @@ import Testing
 struct ScrollbackEditorTests {
     @Test
     func command_prefers_visual_then_editor_then_vi_and_opens_at_line() {
-        let cmd = ScrollbackEditor.command(forPath: "/tmp/seshterm-scrollback-abc.txt", openAtLine: 500)
-        #expect(cmd == "exec ${VISUAL:-${EDITOR:-vi}} +500 '/tmp/seshterm-scrollback-abc.txt'")
+        let cmd = ScrollbackEditor.command(forPath: "/tmp/cyote-arm-scrollback-abc.txt", openAtLine: 500)
+        #expect(cmd == "exec ${VISUAL:-${EDITOR:-vi}} +500 '/tmp/cyote-arm-scrollback-abc.txt'")
     }
 
     @Test

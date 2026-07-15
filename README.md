@@ -1,11 +1,15 @@
 <h1 align="center">
   <img src="./assets/icon.png" width="128" />
   <br />
-  Macterm
+  CYOTE-arm
 </h1>
 
 <p align="center">
-  A native macOS terminal with a vertical project sidebar and persistent multiplexing, built on libghostty
+  <b>Create Your Own Terminal Experience</b> — a native macOS terminal with a vertical project sidebar and persistent multiplexing, built on libghostty
+</p>
+
+<p align="center">
+  <sub>A personal fork of <a href="https://github.com/thdxg/macterm">Macterm</a> by arm.</sub>
 </p>
 
 <p align="center">
@@ -32,7 +36,7 @@
 ## Features
 
 - **Persistent multiplexing** — projects, tabs, and split panes are saved and restored on relaunch. Shells run under a bundled [zmx](https://github.com/neurosnap/zmx) session, so quitting detaches and relaunching reattaches every pane with its scrollback and running processes intact.
-- **Remote projects** — open a directory on another machine over SSH. Each pane is a persistent session *on the host*, so your shells survive quits, dropped connections, and even a local reboot.
+- **Remote projects** — open a directory on another machine over SSH. Each pane is a persistent session _on the host_, so your shells survive quits, dropped connections, and even a local reboot.
 - **Vertical project sidebar** — organize projects and their tabs in a native macOS sidebar, stacked vertically where there's room to read them.
 - **Command palette** — press <kbd>⌘P</kbd> to split panes, switch projects, or open a directory. Every action is a keystroke away, and each row shows its keybind.
 - **Declarative layouts** — describe a project's tabs, splits, and per-pane commands in YAML; Macterm builds the workspace from it on open.

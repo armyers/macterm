@@ -6,7 +6,7 @@ import Foundation
 /// `vi` as a last resort. `exec` replaces the shell so quitting the editor exits
 /// the process and the ephemeral split closes itself.
 enum ScrollbackEditor {
-    /// e.g. `exec ${VISUAL:-${EDITOR:-vi}} +500 '/tmp/seshterm-scrollback-….txt'`.
+    /// e.g. `exec ${VISUAL:-${EDITOR:-vi}} +500 '/tmp/cyote-arm-scrollback-….txt'`.
     /// `+<line>` opens at that line — passing the last line puts the cursor at
     /// the end (the most recent output). Honored by vi/vim/nvim/nano/emacs;
     /// editors that don't understand `+N` (e.g. Helix, VS Code) just open at the

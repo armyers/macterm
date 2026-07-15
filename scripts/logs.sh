@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BUNDLE_ID="com.thdxg.seshterm.debug"
+BUNDLE_ID="com.thdxg.cyotearm.debug"
 LAST=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --release) BUNDLE_ID="com.thdxg.seshterm" ;;
+    --release) BUNDLE_ID="com.thdxg.cyotearm" ;;
     --last)
       LAST="$2"
       shift

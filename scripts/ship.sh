@@ -33,9 +33,9 @@ step "Install"
 
 # Report the resulting signature. Read all of codesign's output (no early awk
 # `exit`, which would SIGPIPE codesign and trip `set -o pipefail`).
-authority="$(codesign -dvv /Applications/Seshterm.app 2>&1 | awk -F= '/^Authority=/ && !seen { print $2; seen = 1 }')"
+authority="$(codesign -dvv /Applications/CYOTE-arm.app 2>&1 | awk -F= '/^Authority=/ && !seen { print $2; seen = 1 }')"
 if [[ -n $authority ]]; then
-  printf '\n\033[1;32m✓ Shipped to /Applications/Seshterm.app — signed by %s\033[0m\n' "$authority"
+  printf '\n\033[1;32m✓ Shipped to /Applications/CYOTE-arm.app — signed by %s\033[0m\n' "$authority"
 else
-  printf '\n\033[1;32m✓ Shipped to /Applications/Seshterm.app — ad-hoc signed\033[0m\n'
+  printf '\n\033[1;32m✓ Shipped to /Applications/CYOTE-arm.app — ad-hoc signed\033[0m\n'
 fi
