@@ -27,7 +27,7 @@ Everything Macterm does (see [below](#from-macterm-the-base)), plus:
 - **Recent toggles** — bounce between your last two contexts (<kbd>⌘⇧O</kbd>) or the last two panes (<kbd>⌘⌃O</kbd>), vim `ctrl-^` style.
 - **Layout templates** — save the current workspace as a reusable, named layout and pick one when you create a context; ships with built-in starters.
 - **Move cursor to the active pane** on focus change, so scroll-under-cursor just works.
-- **Active-pane accent border** — an optional accent outline around the focused pane in a split (base Macterm already handles dimming the inactive ones).
+- **Active-pane accent border** — an optional accent outline around the focused pane in a split.
 
 ## From Macterm (the base)
 
