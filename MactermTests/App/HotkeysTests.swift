@@ -4,6 +4,28 @@ import Testing
 
 @MainActor
 struct HotkeysTests {
+    // MARK: - Default bindings
+
+    @Test
+    func every_action_default_shortcut_is_valid() {
+        // Guards typos/garbage in any action's default (and the new toggles).
+        for action in HotkeyAction.allCases {
+            #expect(
+                HotkeyRegistry.isValidShortcutString(action.defaultShortcut),
+                "invalid default for \(action.rawValue): \(action.defaultShortcut)"
+            )
+        }
+    }
+
+    @Test
+    func recent_toggles_have_expected_defaults_and_owning_commands() {
+        #expect(HotkeyAction.recentPane.defaultShortcut == "cmd+ctrl+o")
+        #expect(HotkeyAction.recentContext.defaultShortcut == "cmd+shift+o")
+        // Every action must resolve to exactly one owning AppCommand.
+        #expect(HotkeyAction.recentPane.appCommand == .recentPane)
+        #expect(HotkeyAction.recentContext.appCommand == .recentContext)
+    }
+
     // MARK: - parseShortcut
 
     @Test

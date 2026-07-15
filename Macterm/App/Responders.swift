@@ -248,6 +248,10 @@ final class MainAppResponder: KeyResponder {
             appState.selectPreviousProject(projects: projectStore.projects)
             return .handled
         }
+        if HotkeyRegistry.matches(event, action: .recentContext) {
+            appState.selectRecentContext(projects: projectStore.projects)
+            return .handled
+        }
         if HotkeyRegistry.matches(event, action: .nextGlobalTab) {
             appState.selectGlobalTab(.next, projects: projectStore.projects)
             return .handled
@@ -271,6 +275,11 @@ final class MainAppResponder: KeyResponder {
         if HotkeyRegistry.matches(event, action: .previousPane) {
             guard let projectID = appState.activeProjectID else { return .passThrough }
             appState.cyclePane(forward: false, projectID: projectID)
+            return .handled
+        }
+        if HotkeyRegistry.matches(event, action: .recentPane) {
+            guard let projectID = appState.activeProjectID else { return .passThrough }
+            appState.focusRecentPane(projectID: projectID)
             return .handled
         }
 

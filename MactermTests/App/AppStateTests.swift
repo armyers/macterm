@@ -182,6 +182,58 @@ struct AppStateTests {
     }
 
     @Test
+    func selectRecentContext_toggles_between_two_contexts() {
+        // vim ctrl-^ style: jump to the most-recent OTHER context, and again to
+        // come back. Selecting bumps recency, so it stays a 2-item toggle.
+        let state = makeAppState()
+        let p1 = seedProject(state, name: "p1", path: "/tmp1")
+        let p2 = seedProject(state, name: "p2", path: "/tmp2")
+        #expect(state.activeProjectID == p2.id) // last seeded is active
+
+        state.selectRecentContext(projects: [p1, p2])
+        #expect(state.activeProjectID == p1.id)
+        state.selectRecentContext(projects: [p1, p2])
+        #expect(state.activeProjectID == p2.id) // toggled back
+    }
+
+    @Test
+    func selectRecentContext_noop_with_a_single_context() {
+        let state = makeAppState()
+        let p = seedProject(state)
+        state.selectRecentContext(projects: [p])
+        #expect(state.activeProjectID == p.id)
+    }
+
+    @Test
+    func focusRecentPane_toggles_between_two_panes() throws {
+        let state = makeAppState()
+        let p = seedProject(state)
+        state.splitPane(direction: .horizontal, projectID: p.id)
+        let tab = try #require(state.workspaces[p.id]?.activeTab)
+        let ids = tab.splitRoot.allPanes().map(\.id)
+        #expect(ids.count == 2)
+
+        // Deterministic focus + history: focus a, then b (b focused, a recent).
+        tab.focusPane(ids[0])
+        tab.focusPane(ids[1])
+
+        state.focusRecentPane(projectID: p.id)
+        #expect(tab.focusedPaneID == ids[0]) // to the recent pane
+        state.focusRecentPane(projectID: p.id)
+        #expect(tab.focusedPaneID == ids[1]) // and back
+    }
+
+    @Test
+    func focusRecentPane_noop_with_a_single_pane() throws {
+        let state = makeAppState()
+        let p = seedProject(state)
+        let tab = try #require(state.workspaces[p.id]?.activeTab)
+        let only = tab.focusedPaneID
+        state.focusRecentPane(projectID: p.id)
+        #expect(tab.focusedPaneID == only)
+    }
+
+    @Test
     func contextsForPicker_includes_never_visited_contexts_recency_first() {
         // The picker's empty view must surface EVERY context, not just recent
         // ones — a saved-but-dormant (or never-opened) context is still listed

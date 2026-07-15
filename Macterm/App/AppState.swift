@@ -1598,6 +1598,22 @@ final class AppState {
         tab.focusPane(next.id)
     }
 
+    /// Toggle focus to the most-recently-focused OTHER pane in the active tab
+    /// (vim `ctrl-^` style). `focusPane` pushes the pane you leave to the top of
+    /// the focus history, so pressing this again returns you — a 2-item toggle
+    /// with no extra state. Falls back to the next pane in tree order when there
+    /// is no focus history yet (e.g. a freshly-created split).
+    func focusRecentPane(projectID: UUID) {
+        guard let tab = workspaces[projectID]?.activeTab else { return }
+        let panes = tab.splitRoot.allPanes()
+        guard panes.count > 1 else { return }
+        let valid = Set(panes.map(\.id))
+        let target = tab.paneFocusHistory.top(1, in: valid, excluding: tab.focusedPaneID).first
+            ?? panes.first { $0.id != tab.focusedPaneID }?.id
+        guard let target else { return }
+        tab.focusPane(target)
+    }
+
     // MARK: - Project navigation
 
     func selectNextProject(projects: [Project]) {
@@ -1613,6 +1629,19 @@ final class AppState {
               let i = projects.firstIndex(where: { $0.id == current })
         else { return }
         let project = projects[(i - 1 + projects.count) % projects.count]
+        selectProject(project)
+    }
+
+    /// Toggle to the most-recently-used OTHER context (vim `ctrl-^` style).
+    /// `selectProject` bumps the target to the top of the recency stack, so the
+    /// context you leave becomes the new second-most-recent — pressing this
+    /// again returns you. A 2-item toggle with no extra state.
+    func selectRecentContext(projects: [Project]) {
+        guard let current = activeProjectID else { return }
+        let valid = Set(projects.map(\.id))
+        guard let previous = projectRecency.top(1, in: valid, excluding: current).first,
+              let project = projects.first(where: { $0.id == previous })
+        else { return }
         selectProject(project)
     }
 

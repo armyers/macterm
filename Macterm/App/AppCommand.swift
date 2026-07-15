@@ -26,6 +26,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
     case focusDown
     case nextPane
     case previousPane
+    case recentPane
     case resizeLeft
     case resizeRight
     case resizeUp
@@ -44,6 +45,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
     case saveLayoutAs
     case nextProject
     case previousProject
+    case recentContext
     // Window
     case toggleSidebar
     case closeWindow
@@ -73,6 +75,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .focusDown: "Focus Down"
         case .nextPane: "Next Pane"
         case .previousPane: "Previous Pane"
+        case .recentPane: "Recent Pane"
         case .resizeLeft: "Resize Pane Left"
         case .resizeRight: "Resize Pane Right"
         case .resizeUp: "Resize Pane Up"
@@ -90,6 +93,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .saveLayoutAs: "Save Workspace as Layout…"
         case .nextProject: "Next Project"
         case .previousProject: "Previous Project"
+        case .recentContext: "Recent Context"
         case .toggleSidebar: "Toggle Sidebar"
         case .closeWindow: "Close Window"
         case .toggleCommandPalette: "Command Palette"
@@ -118,6 +122,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
              .focusDown,
              .nextPane,
              .previousPane,
+             .recentPane,
              .resizeLeft,
              .resizeRight,
              .resizeUp,
@@ -134,7 +139,8 @@ enum AppCommand: String, CaseIterable, Identifiable {
              .saveLayout,
              .saveLayoutAs,
              .nextProject,
-             .previousProject: .projects
+             .previousProject,
+             .recentContext: .projects
         case .toggleSidebar,
              .closeWindow,
              .toggleCommandPalette: .window
@@ -164,6 +170,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .focusDown: .focusPaneDown
         case .nextPane: .nextPane
         case .previousPane: .previousPane
+        case .recentPane: .recentPane
         case .resizeLeft: .resizePaneLeft
         case .resizeRight: .resizePaneRight
         case .resizeUp: .resizePaneUp
@@ -172,6 +179,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .openContext: .openContext
         case .nextProject: .nextProject
         case .previousProject: .previousProject
+        case .recentContext: .recentContext
         case .toggleSidebar: .toggleSidebar
         case .closeWindow: .closeWindow
         case .toggleCommandPalette: .toggleCommandPalette
