@@ -143,6 +143,12 @@ struct MactermApp: App {
                 AppCommandMenuItem(command: .openProject, appState: appState, projectStore: projectStore, titleOverride: "Open Project…")
             }
             CommandGroup(replacing: .toolbar) {}
+            // Custom "About" so the standard panel carries the tagline (the
+            // stock panel shows only name + version; the tagline rides in as
+            // the credits line).
+            CommandGroup(replacing: .appInfo) {
+                Button("About \(appDisplayName)") { MactermApp.showAboutPanel() }
+            }
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesMenuItem()
             }
@@ -216,6 +222,27 @@ struct MactermApp: App {
         Settings {
             SettingsView()
         }
+    }
+
+    /// Show the standard macOS About panel with the CYOTE-arm tagline. The
+    /// stock panel (name + version + copyright) has no tagline field, so the
+    /// tagline is passed as the `credits` line — the one place a short bit of
+    /// prose renders natively, no custom window needed.
+    static func showAboutPanel() {
+        let tagline = NSAttributedString(
+            string: "Create Your Own Terminal Experience",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: {
+                    let style = NSMutableParagraphStyle()
+                    style.alignment = .center
+                    return style
+                }(),
+            ]
+        )
+        NSApp.activate()
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: tagline])
     }
 }
 
