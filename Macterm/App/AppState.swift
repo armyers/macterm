@@ -484,6 +484,20 @@ final class AppState {
         return projectRecency.top(limit, in: valid).compactMap { byID[$0] }
     }
 
+    /// All contexts for the context picker's empty-query view: those with live
+    /// tabs/panes (`isProjectLoaded`, i.e. opened this session) first, then the
+    /// dormant ones whose state is only saved — each ordered by recency, with
+    /// never-visited contexts trailing. The picker dims the inactive rows so a
+    /// saved-but-not-loaded context is still reachable, just visibly distinct.
+    func contextsForPicker(from projects: [Project]) -> [Project] {
+        let ranked = recentProjects(from: projects, limit: projects.count)
+        let rankedIDs = Set(ranked.map(\.id))
+        let ordered = ranked + projects.filter { !rankedIDs.contains($0.id) }
+        let active = ordered.filter { isProjectLoaded($0.id) }
+        let inactive = ordered.filter { !isProjectLoaded($0.id) }
+        return active + inactive
+    }
+
     private func rebalanceAllWorkspacesIfEnabled() {
         guard Preferences.shared.autoTilingEnabled else { return }
         for ws in workspaces.values {

@@ -97,14 +97,16 @@ struct ContextPickerPanel: View {
     /// "create" affordance. `fileprivate` (not `private`) so the rendering
     /// extension below can reference `ContextPickerPanel.Row`.
     fileprivate enum Row: Identifiable {
-        case project(Project)
+        /// `active` = the context has live tabs/panes (opened this session);
+        /// inactive ones (saved state only) render dimmed.
+        case project(Project, active: Bool)
         case directory(String)
         case create(String)
         case layout(LayoutChoiceRow)
 
         var id: String {
             switch self {
-            case let .project(project): "project:\(project.id.uuidString)"
+            case let .project(project, _): "project:\(project.id.uuidString)"
             case let .directory(path): "dir:\(path)"
             case let .create(name): "create:\(name)"
             case let .layout(choice): "layout:\(choice.id)"
@@ -213,9 +215,11 @@ struct ContextPickerPanel: View {
             let result = ContextSearch.search(
                 query: appState.contextPickerQuery,
                 projects: projectStore.projects,
-                recent: appState.recentProjects(from: projectStore.projects, limit: 10)
+                // Empty query lists ALL contexts (active first, then dormant),
+                // not just the recent handful — inactive ones are dimmed below.
+                recent: appState.contextsForPicker(from: projectStore.projects)
             )
-            var rows = result.matches.map(Row.project)
+            var rows = result.matches.map { Row.project($0, active: appState.isProjectLoaded($0.id)) }
             if result.showCreateRow {
                 rows.append(.create(appState.contextPickerQuery.trimmingCharacters(in: .whitespaces)))
             }
@@ -368,7 +372,7 @@ struct ContextPickerPanel: View {
         let rows = rows
         guard selectedIndex >= 0, selectedIndex < rows.count else { return }
         switch rows[selectedIndex] {
-        case let .project(project):
+        case let .project(project, _):
             close()
             DispatchQueue.main.async { appState.selectProject(project) }
         case let .directory(path):
@@ -431,12 +435,13 @@ private extension ContextPickerPanel.Row {
     @ViewBuilder
     func view(isSelected: Bool) -> some View {
         switch self {
-        case let .project(project):
+        case let .project(project, active):
             ContextPickerRow(
                 systemImage: "folder",
                 title: project.name,
                 subtitle: project.path,
-                isSelected: isSelected
+                isSelected: isSelected,
+                isActive: active
             )
         case let .directory(path):
             ContextPickerRow(
@@ -468,6 +473,10 @@ private struct ContextPickerRow: View {
     let title: String
     let subtitle: String?
     let isSelected: Bool
+    /// Inactive contexts (saved state, no live tabs/panes) render dimmed so
+    /// they're distinguishable from the ones you're currently working in but
+    /// still selectable. Non-context rows (create/directory/layout) pass true.
+    var isActive = true
 
     var body: some View {
         HStack(spacing: 10) {
@@ -488,6 +497,8 @@ private struct ContextPickerRow: View {
             }
             Spacer()
         }
+        // Dim the content (not the selection highlight) for inactive contexts.
+        .opacity(isActive ? 1 : 0.55)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(isSelected ? MactermTheme.fg.opacity(0.12) : .clear)
