@@ -1216,7 +1216,7 @@ final class AppState {
         else { return }
 
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("seshterm-scrollback-\(UUID().uuidString).txt")
+            .appendingPathComponent("cyote-arm-scrollback-\(UUID().uuidString).txt")
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)
         } catch {
@@ -1713,7 +1713,7 @@ final class AppState {
     /// the reliable channel for diagnosing restore/resurrect during testing.
     private func resurrectDebug(_ message: String) {
         guard UserDefaults.standard.bool(forKey: "macterm.resurrect.forceReboot") else { return }
-        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "seshterm-restore-debug.log")
+        let url = URL(fileURLWithPath: NSTemporaryDirectory() + "cyote-arm-restore-debug.log")
         let line = Data((message + "\n").utf8)
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()

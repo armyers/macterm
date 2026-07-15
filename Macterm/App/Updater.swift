@@ -36,9 +36,9 @@ final class Updater {
     private var cancellable: AnyCancellable?
 
     private init() {
-        // Seshterm is a personal fork that updates via `mise run install`, not
+        // CYOTE-arm is a personal fork that updates via `mise run install`, not
         // Sparkle. The bundled feed still points at upstream Macterm's appcast,
-        // so starting the updater would offer to "update" Seshterm to vanilla
+        // so starting the updater would offer to "update" CYOTE-arm to vanilla
         // Macterm and overwrite the fork. Never start it — no background checks,
         // and "Check for Updates" stays disabled (`canCheckForUpdates` is false
         // while the updater isn't started).

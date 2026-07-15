@@ -80,7 +80,7 @@ targets:
         type: file
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.thdxg.seshterm
+        PRODUCT_BUNDLE_IDENTIFIER: com.thdxg.cyotearm
         PRODUCT_NAME: Macterm
         INFOPLIST_FILE: Macterm/Info.plist
         CODE_SIGN_ENTITLEMENTS: Macterm/Macterm.entitlements
@@ -112,14 +112,14 @@ targets:
         # CFBundleDisplayName, and the Application Support directory name. This
         # is the fork's identity; the bundle *name* (PRODUCT_NAME) stays
         # "Macterm" in every config so TEST_HOST and on-disk layout don't shift.
-        PRODUCT_DISPLAY_NAME: Seshterm
+        PRODUCT_DISPLAY_NAME: CYOTE-arm
       configs:
         Debug:
           # Distinct bundle ID + display name so the debug app coexists with a
           # running release app (open won't conflate them) and logs filter
           # cleanly by subsystem (scripts/logs.sh).
-          PRODUCT_BUNDLE_IDENTIFIER: com.thdxg.seshterm.debug
-          PRODUCT_DISPLAY_NAME: Seshterm Debug
+          PRODUCT_BUNDLE_IDENTIFIER: com.thdxg.cyotearm.debug
+          PRODUCT_DISPLAY_NAME: CYOTE-arm Debug
     dependencies:
       # Build ordering only: the post-build script copies the CLI binary into
       # the bundle, so it must exist before the app target finishes.

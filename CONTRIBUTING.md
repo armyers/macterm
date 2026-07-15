@@ -23,13 +23,13 @@ permissions after each `mise run install` / `mise run run`.
 To make those grants **persist across rebuilds**, sign with a stable self-signed cert:
 
 1. **One-time:** Keychain Access → menu **Certificate Assistant → Create a Certificate…** →
-   Name `Seshterm Dev`, Identity Type **Self-Signed Root**, Certificate Type **Code Signing**
+   Name `CYOTE-arm Dev`, Identity Type **Self-Signed Root**, Certificate Type **Code Signing**
    → Create.
 2. Build with the `MACTERM_SIGN_IDENTITY` env var set to that cert's name:
 
    ```bash
-   MACTERM_SIGN_IDENTITY="Seshterm Dev" mise run install   # installed app
-   MACTERM_SIGN_IDENTITY="Seshterm Dev" mise run run       # debug build
+   MACTERM_SIGN_IDENTITY="CYOTE-arm Dev" mise run install   # installed app
+   MACTERM_SIGN_IDENTITY="CYOTE-arm Dev" mise run run       # debug build
    ```
 
    (Unset → ad-hoc, as before — the checked-in default is unchanged.) On the first signed
@@ -38,10 +38,10 @@ To make those grants **persist across rebuilds**, sign with a stable self-signed
 3. Verify, then grant permissions once (they now stick across rebuilds):
 
    ```bash
-   codesign -dvv /Applications/Seshterm.app 2>&1 | grep -i authority   # → Authority=Seshterm Dev
+   codesign -dvv /Applications/CYOTE-arm.app 2>&1 | grep -i authority   # → Authority=CYOTE-arm Dev
    ```
 
-   System Settings → Privacy & Security → **Full Disk Access** → `+` → `/Applications/Seshterm.app`.
+   System Settings → Privacy & Security → **Full Disk Access** → `+` → `/Applications/CYOTE-arm.app`.
 
 To avoid typing the env var each time, set it in a gitignored `.mise.local.toml`
 (`[env]` section) or your shell profile.
