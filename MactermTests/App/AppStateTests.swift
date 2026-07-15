@@ -182,6 +182,24 @@ struct AppStateTests {
     }
 
     @Test
+    func contextsForPicker_includes_never_visited_contexts_recency_first() {
+        // The picker's empty view must surface EVERY context, not just recent
+        // ones — a saved-but-dormant (or never-opened) context is still listed
+        // (dimmed in the UI). Ordering: recency-known first, never-visited last.
+        let state = makeAppState()
+        let p1 = seedProject(state, name: "p1", path: "/tmp1") // visited
+        let p2 = seedProject(state, name: "p2", path: "/tmp2") // visited more recently
+        let p3 = Project(name: "p3", path: "/tmp3", sortOrder: 2) // never opened
+
+        let ordered = state.contextsForPicker(from: [p1, p2, p3])
+
+        // All three appear (the never-visited p3 is not dropped).
+        #expect(Set(ordered.map(\.id)) == Set([p1.id, p2.id, p3.id]))
+        // No live surfaces under test → all inactive → recency order, p3 trails.
+        #expect(ordered.map(\.name) == ["p2", "p1", "p3"])
+    }
+
+    @Test
     func moveTab_same_project_is_noop() throws {
         let state = makeAppState()
         let p = seedProject(state)
