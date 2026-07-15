@@ -25,7 +25,7 @@ Everything Macterm does (see [below](#from-macterm-the-base)), plus:
 - **Reboot resurrect** — sessions survive a full **reboot**, not just an app quit. Each pane's color scrollback is captured and replayed, and allowlisted programs (editors, pagers, monitors) are relaunched, so you reopen right where you left off even after the machine restarts.
 - **Contexts** — switch workspaces by _task_, not by git repo. <kbd>⌘⇧P</kbd> opens the context picker; dormant contexts (state saved, nothing currently running) stay listed and dimmed, so closed work is always one keystroke away. Each pane's zmx session is named after its context, and `macterm session list` shows a live `ctx:` column joined back to the pane.
 - **Recent toggles** — bounce between your last two contexts (<kbd>⌘⇧O</kbd>) or the last two panes (<kbd>⌘⌃O</kbd>), vim `ctrl-^` style.
-- **Layout templates** — save the current workspace as a reusable, named layout and pick one when you create a context; ships with built-in starters.
+- **Layout templates** — save any live workspace as a reusable, named layout in a shared library, start from built-in starters, and pick one when creating a context.
 - **Move cursor to the active pane** on focus change, so scroll-under-cursor just works.
 - **Active-pane accent border** — an optional accent outline around the focused pane in a split.
 
