@@ -533,7 +533,7 @@ final class AppState {
             activeProjectID = id
             recordProjectVisit(id)
             autoApplyLayoutOnFirstOpen(project)
-            ensureWorkspace(projectID: id, path: project.path)
+            ensureWorkspace(projectID: id, path: project.path, contextName: project.name)
             // Reattaching remote panes need the zmx path before warm/render.
             stampRemoteZmxPath(project)
             acknowledgeActiveTab(projectID: id)
@@ -661,7 +661,7 @@ final class AppState {
         activeProjectID = project.id
         recordProjectVisit(project.id)
         autoApplyLayoutOnFirstOpen(project)
-        ensureWorkspace(projectID: project.id, path: project.path)
+        ensureWorkspace(projectID: project.id, path: project.path, contextName: project.name)
         // Stamp the remote zmx path onto every pane BEFORE any surface spawns
         // (warmFocusedProject / render → ensureNSView reads it). It's a host
         // property re-derived from the project on each open, not persisted.
@@ -940,9 +940,9 @@ final class AppState {
     /// `run:` semantics). Returns the new tab's ID, nil when the project has
     /// no live workspace.
     @discardableResult
-    func createTab(projectID: UUID, projectPath: String, command: String? = nil) -> UUID? {
+    func createTab(projectID: UUID, projectPath: String, sessionSlug: String? = nil, command: String? = nil) -> UUID? {
         guard let ws = workspaces[projectID] else { return nil }
-        let tab = ws.createTab(projectPath: projectPath, command: command)
+        let tab = ws.createTab(projectPath: projectPath, sessionSlug: sessionSlug, command: command)
         logger.debug("createTab: project=\(projectID, privacy: .public) tabs=\(ws.tabs.count, privacy: .public)")
         saveWorkspaces()
         return tab.id
@@ -953,7 +953,7 @@ final class AppState {
     /// not whatever cwd the last pane drifted to.
     func createTab(projectID: UUID, projects: [Project]) {
         guard let project = projects.first(where: { $0.id == projectID }) else { return }
-        createTab(projectID: projectID, projectPath: project.path)
+        createTab(projectID: projectID, projectPath: project.path, sessionSlug: project.name)
     }
 
     func closeTab(_ tabID: UUID, projectID: UUID) {
@@ -1112,7 +1112,7 @@ final class AppState {
         let beforeTabID = workspaces[project.id]?.activeTabID
 
         activeProjectID = project.id
-        ensureWorkspace(projectID: project.id, path: project.path)
+        ensureWorkspace(projectID: project.id, path: project.path, contextName: project.name)
         let didAcknowledgeCompletion = workspaces[project.id]?.selectTab(tab.id) ?? false
         if activeProjectID != beforeProjectID
             || workspaces[project.id]?.activeTabID != beforeTabID
@@ -1653,10 +1653,15 @@ final class AppState {
 
     // MARK: - Private
 
-    private func ensureWorkspace(projectID: UUID, path: String) {
+    /// - Parameter contextName: the project's context name, used as the zmx
+    ///   session-name slug for panes created here (so `zmx ls` groups by the
+    ///   user's chosen context, not the path basename). nil falls back to the
+    ///   basename. Only matters for a fresh default workspace — a restored one
+    ///   carries persisted session names.
+    private func ensureWorkspace(projectID: UUID, path: String, contextName: String? = nil) {
         if workspaces[projectID] == nil {
             resurrectDebug("ensureWorkspace: CREATED DEFAULT for \(projectID) (no restored workspace)")
-            workspaces[projectID] = Workspace(projectID: projectID, projectPath: path)
+            workspaces[projectID] = Workspace(projectID: projectID, projectPath: path, sessionSlug: contextName)
         }
     }
 

@@ -221,12 +221,14 @@ final class ControlHandler {
         let entries = snapshot.entries
         let leaders = snapshot.leaders
         let paneBySession = paneIDsBySessionName()
+        let contextBySession = contextBySessionName()
         let infos = entries.map { entry in
             ControlSessionInfo(
                 name: entry.name,
                 clients: entry.clients,
                 leaderPID: leaders[entry.name],
-                paneID: paneBySession[entry.name]
+                paneID: paneBySession[entry.name],
+                context: contextBySession[entry.name]
             )
         }
         return ControlData(sessions: infos)
@@ -298,8 +300,10 @@ final class ControlHandler {
 
     private func tabNew(_ args: ControlArgs) throws -> ControlData {
         let (project, workspace) = try resolveWorkspace(args)
-        guard let tabID = appState.createTab(projectID: project.id, projectPath: project.path, command: args.run),
-              let index = workspace.tabs.firstIndex(where: { $0.id == tabID })
+        guard let tabID = appState.createTab(
+            projectID: project.id, projectPath: project.path, sessionSlug: project.name, command: args.run
+        ),
+            let index = workspace.tabs.firstIndex(where: { $0.id == tabID })
         else {
             throw ControlError(code: .internalError, message: "tab creation failed")
         }
@@ -747,6 +751,26 @@ final class ControlHandler {
             for tab in workspace.tabs {
                 for pane in tab.splitRoot.allPanes() {
                     map[pane.sessionName] = pane.id.uuidString
+                }
+            }
+        }
+        return map
+    }
+
+    /// Session name → live context (project) name, joined through the live pane
+    /// and the project list — authoritative and rename-proof (the name's slug is
+    /// fixed at creation; this reflects the project's CURRENT name).
+    private func contextBySessionName() -> [String: String] {
+        let nameByProjectID = Dictionary(
+            projectStore.projects.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var map: [String: String] = [:]
+        for workspace in appState.workspaces.values {
+            guard let context = nameByProjectID[workspace.projectID] else { continue }
+            for tab in workspace.tabs {
+                for pane in tab.splitRoot.allPanes() {
+                    map[pane.sessionName] = context
                 }
             }
         }

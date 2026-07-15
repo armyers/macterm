@@ -250,6 +250,10 @@ struct ControlSessionInfo: Codable, Equatable {
     /// The live pane currently bound to this session, if any (a session with
     /// no pane is an orphan awaiting reap or reattach).
     var paneID: String?
+    /// The context (project) name of the live pane bound to this session — the
+    /// authoritative, rename-proof label (joined via the live pane, not parsed
+    /// from the name's slug). nil for an orphan session with no live pane.
+    var context: String?
 }
 
 /// Read-only snapshot of a pane's terminal core (`pane.inspect`). Every field

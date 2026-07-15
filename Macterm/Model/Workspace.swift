@@ -308,9 +308,12 @@ final class Workspace: Identifiable {
         return tabs.first { $0.id == activeTabID }
     }
 
-    init(projectID: UUID, projectPath: String) {
+    /// - Parameter sessionSlug: the pane's zmx session-name slug source — the
+    ///   project's *context name* (what the user chose in the picker), NOT the
+    ///   path basename. nil falls back to the path basename inside `Pane.init`.
+    init(projectID: UUID, projectPath: String, sessionSlug: String? = nil) {
         self.projectID = projectID
-        let tab = TerminalTab(projectPath: projectPath, projectID: projectID)
+        let tab = TerminalTab(projectPath: projectPath, projectID: projectID, sessionSlug: sessionSlug)
         tabs.append(tab)
         activeTabID = tab.id
     }
@@ -330,8 +333,8 @@ final class Workspace: Identifiable {
     }
 
     @discardableResult
-    func createTab(projectPath: String, command: String? = nil) -> TerminalTab {
-        let tab = TerminalTab(projectPath: projectPath, projectID: projectID, command: command)
+    func createTab(projectPath: String, sessionSlug: String? = nil, command: String? = nil) -> TerminalTab {
+        let tab = TerminalTab(projectPath: projectPath, projectID: projectID, sessionSlug: sessionSlug, command: command)
         tabs.append(tab)
         if let current = activeTabID { tabHistory.push(current) }
         activeTabID = tab.id

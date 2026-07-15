@@ -77,6 +77,7 @@ enum Output {
             let clients = session.clients.map(String.init) ?? "?"
             return [
                 session.name,
+                "ctx:\(session.context ?? "-")",
                 "clients:\(clients)",
                 session.leaderPID.map { "pid:\($0)" } ?? "pid:-",
                 session.paneID != nil ? "attached-pane" : "orphan",
