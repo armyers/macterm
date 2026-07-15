@@ -83,6 +83,9 @@ extension AppCommand {
         case .previousPane:
             guard let projectID else { return nil }
             return { ctx.appState.cyclePane(forward: false, projectID: projectID) }
+        case .recentPane:
+            guard let projectID else { return nil }
+            return { ctx.appState.focusRecentPane(projectID: projectID) }
         case .resizeLeft:
             guard let projectID else { return nil }
             return { ctx.appState.resizePane(.left, projectID: projectID) }
@@ -181,6 +184,8 @@ extension AppCommand {
             return { ctx.appState.selectNextProject(projects: ctx.projectStore.projects) }
         case .previousProject:
             return { ctx.appState.selectPreviousProject(projects: ctx.projectStore.projects) }
+        case .recentContext:
+            return { ctx.appState.selectRecentContext(projects: ctx.projectStore.projects) }
         case .toggleSidebar:
             return { ctx.appState.sidebarVisible.toggle() }
         case .closeWindow:
