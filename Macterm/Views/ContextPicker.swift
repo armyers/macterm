@@ -23,7 +23,7 @@ struct ContextPickerOverlay: View {
                     }
 
                 ContextPickerPanel()
-                    .frame(width: 500)
+                    .frame(width: 1000)
                     .contextPickerBackground(cornerRadius: Self.cornerRadius)
                     .overlay(
                         RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
@@ -278,7 +278,7 @@ struct ContextPickerPanel: View {
                     }
                     .padding(.vertical, 6)
                 }
-                .frame(maxHeight: 340)
+                .frame(maxHeight: 680)
                 .onChange(of: selectedIndex) { _, idx in
                     if selectionFromHover {
                         selectionFromHover = false
